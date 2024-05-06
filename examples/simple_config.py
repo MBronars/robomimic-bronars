@@ -2,8 +2,11 @@
 An example for creating and using the custom Config object.
 """
 from robomimic.config.base_config import Config
+from robomimic.config import config_factory
 
 if __name__ == "__main__":
+
+    config = config_factory(algo_name = 'bc')
 
     # create config
     config = Config()
