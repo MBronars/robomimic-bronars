@@ -294,8 +294,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
             obs_dict_tensor = dict((k, torch.cat(v, dim=0).unsqueeze(0)) for k,v in obs_dict_list.items())
 
-            # remove final dim if it is 1
-            obs_dict_tensor = dict((k, v.squeeze(-1)) for k,v in obs_dict_tensor.items())
+            obs_dict_tensor = dict((k, v.squeeze(-1)) for k, v in obs_dict_tensor.items())
             
             # run inference
             # [1,T,Da]
@@ -336,13 +335,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
             'obs': obs_dict,
             'goal': goal_dict
         }
-
         for k in self.obs_shapes:
-            # first two dimensions should be [B, T] for inputs
-            # if inputs['obs'][k].ndim - 1 == len(self.obs_shapes[k]):
-            #     inputs['obs'][k] = inputs['obs'][k].unsqueeze(0)
+            # first two dimensions should be S[B, T] for inputs
             assert inputs['obs'][k].ndim - 2 == len(self.obs_shapes[k])
-
         obs_features = TensorUtils.time_distributed(inputs, self.nets['policy']['obs_encoder'], inputs_as_kwargs=True)
         assert obs_features.ndim == 3  # [B, T, D]
         B = obs_features.shape[0]

@@ -29,10 +29,10 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
 
     obs = env.reset_to(state_dict)
 
-    for i in range(200):
-        action = np.random.randn(env.action_dimension) * 0.1
-        obs, reward, done, info = env.step(action)
-        env.render()
+    # for i in range(200):
+    #     action = np.random.randn(env.action_dimension) * 0.1
+    #     obs, reward, done, info = env.step(action)
+    #     env.render()
 
     results = {}
     video_count = 0
@@ -40,9 +40,7 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
     try:
         for step_i in range(horizon):
             act = policy(ob=obs)
-
             next_obs, r, done, _ = env.step(act)
-
             total_reward += r
             success = env.is_success()["task"]
 
@@ -52,7 +50,7 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
                 if video_count % video_skip == 0:
                     video_img = []
                     for cam_name in camera_names:
-                        video_img.append(env.render(mode="rgb_array", camera_name=cam_name))
+                        video_img.append(env.render(mode="rgb_array", height=512, width=512, camera_name=cam_name))
                     video_img = np.concatenate(video_img, axis=1)
                     video_writer.append_data(video_img)
                 video_count += 1
@@ -75,7 +73,7 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
 if __name__ == "__main__":
     # User Arguments
     ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300.pth")
-    rollout_horizon = 1000
+    rollout_horizon = 200
     video_path = "diffusion_rollout.mp4"
 
     # Set up device
@@ -85,8 +83,8 @@ if __name__ == "__main__":
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
     
     # change the PickPlace environment setting here
-    ckpt_dict["env_metadata"]["env_kwargs"]["single_object_mode"] = 1
-    ckpt_dict["env_metadata"]["env_kwargs"]["render_camera"] = "robot0_eye_in_hand"
+    # ckpt_dict["env_metadata"]["env_kwargs"]["single_object_mode"] = 1
+    # ckpt_dict["env_metadata"]["env_kwargs"]["render_camera"] = "robot0_eye_in_hand"
     env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
 
     video_writer = imageio.get_writer(video_path, fps=20)
