@@ -301,6 +301,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor)
             
             # put actions into the queue
+            # TODO: Change here to apply first Ta actions
             self.action_queue.extend(action_sequence[0])
         
         # has action, execute from left to right
