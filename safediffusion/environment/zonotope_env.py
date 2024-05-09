@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from stl import mesh
 
 from armtd.environments.arm_3d import Arm_3D
 from robosuite.environments.base import MujocoEnv
@@ -28,9 +29,17 @@ class GeomType(Enum):
 
 class ZonotopeMuJoCoEnv(Arm_3D):
     """
-    Environment for the 3D arm with zonotopes as obstacles.
+    Zontopic Twin of the MuJoCo RobotEnv, tested on PickPlace only yet.
+    (NEVER override, modify the MuJoCoEnv)
 
-    Philosophy: NEVER MODIFY THE MUJOCOENV
+    NOTE
+        1. Represents the visual zonotopes: World, VisualObject
+        2. Represents the static, collision zonotopes: Arena, Mount
+        3. Represents the dynamic, collision zonotopes: Robot, Gripper, Object
+    
+    TODO:
+        1. Represent the gripper object
+        2. Re-hash all the data structure to be more efficient
     """
     def __init__(self, mujoco_env, render_online = False, render_kwargs = None, **kwargs):
         """
@@ -55,8 +64,16 @@ class ZonotopeMuJoCoEnv(Arm_3D):
 
         # construct zonotopes that is unchanged throughout the simulation
         self._link_zonos_stl = self._Arm_3D__link_zonos
-        self.arena_zonotopes = self.get_arena_zonotopes()
-        self.mount_zonotopes = self.get_mount_zonotopes()
+        self._object_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.objects]
+        self._visual_object_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.visual_objects]
+        # self._gripper_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.robots[0].gripper]
+        self.arena_zonos = self.get_arena_zonotopes()
+        self.mount_zonos = self.get_mount_zonotopes()
+        self.link_zonos = []
+        self.object_zonos = []
+        self.gripper_zonos = []
+        self.visual_object_zonos = []
+
         self.initialize_renderer()
 
     def hash_geom_ids(self):
@@ -68,9 +85,9 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.arena_geom_ids = [geom_id for geom_id in range(n_geoms) if self.get_body_name_from_geom_id(geom_id) in ["bin1", "bin2"]]
         self.object_geom_ids = [value[0] for value in self.env.obj_geom_id.values() if len(value) != 0]
     
-    #######################################
-    # Construct zonotopes from geometry
-    #######################################
+    ##########################################
+    # Construct zonotopes from MuJoCo Models
+    ##########################################
 
     def get_zonotope_from_geom_id(self, geom_id):
         """
@@ -97,6 +114,31 @@ class ZonotopeMuJoCoEnv(Arm_3D):
 
         return ZP
     
+    def zonotope_from_object_mesh_file(self, object):
+        """
+        Construct the zonotope primitive from the mesh file
+
+        Calls the numpy-stl to compute the vertices and bounding box
+        """
+        assert isinstance(object, MujocoObject)
+        mesh_asset = [asset for asset in object.asset if asset.tag == 'mesh']
+        mesh_file  = mesh_asset[0].attrib["file"]
+        mesh_ext   = mesh_file.split(".")[-1]
+        mesh_file  = mesh_file.replace(mesh_ext, "stl")
+
+        mesh_obj = mesh.Mesh.from_file(mesh_file)
+        mesh_V = mesh_obj.vectors.reshape(-1, 3)
+        
+        # construct bbox zonotope here
+        max = mesh_V.max(axis=0)
+        min = mesh_V.min(axis=0)
+
+        c = (max+min)/2
+        G = np.diag((max-min)/2)
+        Z = np.vstack([c, G])
+
+        return zonotope(Z)
+    
     def get_arena_zonotopes(self):
         """
         Get the zonotopes of the arena
@@ -110,6 +152,36 @@ class ZonotopeMuJoCoEnv(Arm_3D):
             zonotopes.append(Z)
 
         zonotopes = [zono for zono in zonotopes if zono is not None]
+
+        return zonotopes
+    
+    def get_object_zonotopes(self):
+        """
+        Get the zonotope of the objects
+        We assume that all objects are created with mesh file
+        """
+        zonotopes = []
+        for obj_idx, obj in enumerate(self.env.objects):
+            obj_pos = self.env.sim.data.get_body_xpos(obj.root_body)
+            obj_rot = self.env.sim.data.get_body_xmat(obj.root_body)
+            obj_stl = self._object_zonos_stl[obj_idx]
+            object_zono = reach_utils.transform_zonotope(zono=obj_stl, pos=obj_pos, rot=obj_rot)
+            zonotopes.append(object_zono)
+
+        return zonotopes
+    
+    def get_visual_object_zonotopes(self):
+        """
+        Get the zonotope of the objects
+        We assume that all objects are created with mesh file
+        """
+        zonotopes = []
+        for obj_idx, obj in enumerate(self.env.visual_objects):
+            obj_pos = self.env.sim.data.get_body_xpos(obj.root_body)
+            obj_rot = self.env.sim.data.get_body_xmat(obj.root_body)
+            obj_stl = self._visual_object_zonos_stl[obj_idx]
+            object_zono = reach_utils.transform_zonotope(zono=obj_stl, pos=obj_pos, rot=obj_rot)
+            zonotopes.append(object_zono)
 
         return zonotopes
     
@@ -145,35 +217,6 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         zonotopes = [zono for zono in zonotopes if zono is not None]
         
         return zonotopes
-    
-    def zonotope_from_mujoco_object(self, object):
-        """
-        Create zonotopic representation of bounding box of MuJoCo Object
-
-        Args
-            env: Robosuite Environment
-            object: MujocoObject
-
-        Output
-            zonotope
-
-        NOTE: Need to check if the center of the bounding box is the center of the root body.
-        -- objects/MuJoCoXMLObject: bbox[2] = max(obj.bottom_offset, obj.bbox_top_offset) - obj.bottom_offset
-        -- The z-axis is not aligned -- why?
-        """
-        assert isinstance(object, MujocoObject)
-
-        # env.objects[0].xml
-
-        c = self.env.sim.data.get_body_xpos(object.root_body)
-        R = self.env.sim.data.get_body_xmat(object.root_body)
-
-        G = np.diag(object.get_bounding_box_half_size())
-        G = R@G
-
-        Z = np.vstack([c, G])
-
-        return zonotope(Z)
     
     def is_visual_geom(self, geom_id):
         """
@@ -257,12 +300,12 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         # sync the robot state with the mujoco env
         self.qpos = self.get_qpos_from_sim()
         self.qvel = self.get_qvel_from_sim()
-        self.link_zonos = self.zono_FO(self.qpos)
-        self.gripper_zonotopes = self.get_gripper_zonotopes()
 
-        # sync the obstacles with the mujoco env
-        self.object_zonotopes = [self.zonotope_from_mujoco_object(obj) for obj in self.env.objects]
-        
+        # sync the zonotopes
+        self.link_zonos = self.zono_FO(self.qpos)
+        self.gripper_zonos = self.get_gripper_zonotopes()
+        self.object_zonos = self.get_object_zonotopes()
+        self.visual_object_zonos = self.get_visual_object_zonotopes()
         
         # reset the internal status
         self.done = False
@@ -286,24 +329,23 @@ class ZonotopeMuJoCoEnv(Arm_3D):
     # Visualization Code              #
     ###################################
     def initialize_renderer(self):
+        render_width = 20
+        render_height = 20
         arena_color = 'red'
         arena_alpha = 0.1
-        arena_linewidth = 0.5
+        arena_linewidth = 0.1
 
         mount_color = 'red'
-        mount_alpha = 0.1
-        mount_linewidth = 0.5
-
+        mount_alpha = 0.5
+        mount_linewidth = 0.05
         
         if self.fig is None:
             if self.render_online:
                 plt.ion()
             
             self.fig = plt.figure()
+            self.fig.set_size_inches(render_width, render_height)
             self.ax = plt.axes(projection='3d')
-            self.ax.set_xlim(self.render_kwargs["xlim"])
-            self.ax.set_ylim(self.render_kwargs["ylim"])
-            self.ax.set_zlim(self.render_kwargs["zlim"])
 
             # TODO: check this
             if not self.ticks:
@@ -316,28 +358,34 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.link_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.gripper_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.object_patches = self.ax.add_collection3d(Poly3DCollection([]))
+        self.visual_object_patches = self.ax.add_collection3d(Poly3DCollection([]))
 
-        arena_patches_data = torch.vstack([arena_zono.polyhedron_patch() for arena_zono in self.arena_zonotopes])
+        arena_patches_data = torch.vstack([arena_zono.polyhedron_patch() for arena_zono in self.arena_zonos])
         self.arena_patches = self.ax.add_collection3d(Poly3DCollection(arena_patches_data, 
                                                                         edgecolor='black', 
                                                                         facecolor=arena_color, 
                                                                         alpha=arena_alpha, 
                                                                         linewidths=arena_linewidth))
         
-        mount_patches_data = torch.vstack([mount_zono.polyhedron_patch() for mount_zono in self.mount_zonotopes])
+        mount_patches_data = torch.vstack([mount_zono.polyhedron_patch() for mount_zono in self.mount_zonos])
         self.mount_patches = self.ax.add_collection3d(Poly3DCollection(mount_patches_data, 
                                                                         edgecolor='black', 
                                                                         facecolor=mount_color, 
                                                                         alpha=mount_alpha, 
                                                                         linewidths=mount_linewidth))
-        
-        # self.env.sim.data.get_geom_xpos
-        
-        # self.env.sim.model.geom_bodyid
+
+        vertices = torch.vstack([mount_patches_data.reshape(-1, 3),
+                                 arena_patches_data.reshape(-1, 3)])
+        max_V = vertices.cpu().numpy().max(axis=0)
+        min_V = vertices.cpu().numpy().min(axis=0)
+
+        self.ax.set_xlim([min_V[0] - 0.1, max_V[0] + 0.1])
+        self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
+        self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
         
     def render(self):
         # Vis settings here
-        robot_color = 'blue'
+        robot_color = 'black'
         robot_alpha = 0.5
         robot_linewidth = 1
 
@@ -345,11 +393,19 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         gripper_alpha = 1
         gripper_linewidth = 1
 
-        object_color = 'green'
+        object_color = 'blue'
         object_alpha = 0.8
         object_linewidth = 1
 
+        visual_object_color = 'green'
+        visual_object_alpha = 0.2
+        visual_object_linewidth = 1
 
+        # clear all the previous patches
+        self.link_patches.remove()
+        self.gripper_patches.remove()
+        self.object_patches.remove()
+        
         # Render the robot
         link_patches_data = torch.vstack([link_zono.polyhedron_patch() for link_zono in self.link_zonos])
         self.link_patches = self.ax.add_collection3d(Poly3DCollection(link_patches_data, 
@@ -358,7 +414,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
                                                                       alpha=robot_alpha, 
                                                                       linewidths=robot_linewidth))
         
-        gripper_patches_data = torch.vstack([gripper_zono.polyhedron_patch() for gripper_zono in self.gripper_zonotopes])
+        gripper_patches_data = torch.vstack([gripper_zono.polyhedron_patch() for gripper_zono in self.gripper_zonos])
         self.gripper_patches = self.ax.add_collection3d(Poly3DCollection(gripper_patches_data, 
                                                                 edgecolor=gripper_color, 
                                                                 facecolor=gripper_color, 
@@ -366,20 +422,20 @@ class ZonotopeMuJoCoEnv(Arm_3D):
                                                                 linewidths=gripper_linewidth))
         
         # Render the objects
-        object_patches_data = torch.vstack([obj.polyhedron_patch() for obj in self.object_zonotopes])
+        object_patches_data = torch.vstack([obj.polyhedron_patch() for obj in self.object_zonos])
         self.object_patches = self.ax.add_collection3d(Poly3DCollection(object_patches_data, 
                                                                         edgecolor=object_color, 
                                                                         facecolor=object_color, 
                                                                         alpha=object_alpha, 
                                                                         linewidths=object_linewidth))
         
-        # Render the objects
-        object_patches_data = torch.vstack([obj.polyhedron_patch() for obj in self.object_zonotopes])
-        self.object_patches = self.ax.add_collection3d(Poly3DCollection(object_patches_data, 
-                                                                        edgecolor=object_color, 
-                                                                        facecolor=object_color, 
-                                                                        alpha=object_alpha, 
-                                                                        linewidths=object_linewidth))
+        # Render the visual objects
+        visual_object_patches_data = torch.vstack([obj.polyhedron_patch() for obj in self.visual_object_zonos])
+        self.visual_object_patches = self.ax.add_collection3d(Poly3DCollection(visual_object_patches_data, 
+                                                                        edgecolor=visual_object_color, 
+                                                                        facecolor=visual_object_color, 
+                                                                        alpha=visual_object_alpha, 
+                                                                        linewidths=visual_object_linewidth))
         
         # Render the arena        
         self.fig.canvas.draw()
@@ -388,3 +444,36 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         # Save the figure
         if self.render_kwargs is not None and "save_dir" in self.render_kwargs:
             plt.savefig(os.path.join(self.render_kwargs["save_dir"], f"task.png"))
+
+
+#########
+# DEPRECATED
+#########
+    # def zonotope_from_mujoco_object(self, object):
+    #     """
+    #     Create zonotopic representation of bounding box of MuJoCo Object
+
+    #     Args
+    #         env: Robosuite Environment
+    #         object: MujocoObject
+
+    #     Output
+    #         zonotope
+
+    #     NOTE: Need to check if the center of the bounding box is the center of the root body.
+    #     -- objects/MuJoCoXMLObject: bbox[2] = max(obj.bottom_offset, obj.bbox_top_offset) - obj.bottom_offset
+    #     -- The z-axis is not aligned -- why?
+    #     """
+    #     assert isinstance(object, MujocoObject)
+
+    #     # env.objects[0].xml
+
+    #     c = self.env.sim.data.get_body_xpos(object.root_body)
+    #     R = self.env.sim.data.get_body_xmat(object.root_body)
+
+    #     G = np.diag(object.get_bounding_box_half_size())
+    #     G = R@G
+
+    #     Z = np.vstack([c, G])
+
+    #     return zonotope(Z)

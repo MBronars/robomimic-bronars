@@ -16,6 +16,7 @@ if __name__ == "__main__":
     controller_name  = 'JOINT_POSITION'
     # controller_name  = 'OSC'
     rand_seed = 42
+    # rand_seed = 126
     visualize = False
     ##################################################
 
@@ -36,25 +37,22 @@ if __name__ == "__main__":
     )
     
     env.reset()
-    env.viewer.set_camera(camera_id=0)
+    env.viewer.set_camera(camera_id=1)
 
     render_kwargs = {
-        "xlim": [-0.3, 0.3],
-        "ylim": [-0.3, 0.3],
-        "zlim": [0, 1.0],
-        "save_dir": "figures_twin_world"}
+        "save_dir": f"figures/twin_world_{rand_seed}"}
     
     zono_env = ZonotopeMuJoCoEnv(env, render_online=True, ticks=True, render_kwargs=render_kwargs)
     zono_env.reset()
     zono_env.render()
 
-    for i in range(500):
-        if i % 50 == 0:
-            # env.reset()
-            print(env.sim.data.get_body_xpos('robot0_base'))
-            print(env.sim.data.get_body_xpos('robot0_shoulder_link'))
-            print(env.sim.data.get_body_xpos('robot0_forearm_link'))
-        # env.step(np.random.rand(env.action_dim))
-        env.step(np.zeros(env.action_dim))
+    for i in range(5000):        
+        # if i % 1000 == 0:
+        #     env.reset()
+        #     env.viewer.set_camera(camera_id=2)
+        #     zono_env.reset()
+        #     zono_env.render()
 
-        env.render()
+        env.step(np.zeros(env.action_dim))
+        obs = env.render()
+        
