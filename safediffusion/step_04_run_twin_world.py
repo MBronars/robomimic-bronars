@@ -14,6 +14,7 @@ if __name__ == "__main__":
     ############ User Parameters #####################
     # controller_name: JOINT_POSITION, JOINT_VELOCITY, JOINT_TORQUE, OSC_POSITION, OSC_POSE, IK_POSE
     controller_name  = 'JOINT_POSITION'
+    # controller_name  = 'OSC'
     rand_seed = 42
     visualize = False
     ##################################################
@@ -37,12 +38,23 @@ if __name__ == "__main__":
     env.reset()
     env.viewer.set_camera(camera_id=0)
 
-    zono_env = ZonotopeMuJoCoEnv(env)
+    render_kwargs = {
+        "xlim": [-0.3, 0.3],
+        "ylim": [-0.3, 0.3],
+        "zlim": [0, 1.0],
+        "save_dir": "figures_twin_world"}
+    
+    zono_env = ZonotopeMuJoCoEnv(env, render_online=True, ticks=True, render_kwargs=render_kwargs)
     zono_env.reset()
-    zono_env.visualize_task()
+    zono_env.render()
 
     for i in range(500):
+        if i % 50 == 0:
+            # env.reset()
+            print(env.sim.data.get_body_xpos('robot0_base'))
+            print(env.sim.data.get_body_xpos('robot0_shoulder_link'))
+            print(env.sim.data.get_body_xpos('robot0_forearm_link'))
+        # env.step(np.random.rand(env.action_dim))
         env.step(np.zeros(env.action_dim))
-        env.render()
 
-    print("Done!")
+        env.render()
