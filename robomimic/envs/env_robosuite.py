@@ -5,6 +5,7 @@ with metadata present in datasets.
 """
 import json
 import numpy as np
+import os
 from copy import deepcopy
 
 import robosuite
