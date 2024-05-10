@@ -369,13 +369,13 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 sample=naction
             ).prev_sample
 
-
         #############################
         # TODO:  Add Safety Filter  #
         # Can put this above or in  #
         # the loop to filter before #
         # diffusion process is done #
         #############################
+        self.action_sequence_ref = naction
 
         # process action using Ta
         start = To - 1

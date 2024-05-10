@@ -5,9 +5,10 @@ import matplotlib.pyplot as plt
 from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
-from zonopy.contset.zonotope.zono import zonotope
+# from zonopy.contset.zonotope.zono import zonotope
 
-from armtd.environments.arm_3d import Arm_3D
+from armtd.reachability.conSet.zonotope.zono import zonotope
+
 
 def transform_zonotope(zono, pos, rot):
     """
@@ -25,6 +26,7 @@ def transform_zonotope(zono, pos, rot):
     c_new = rot@c + pos
     G_new = G@rot.T
     Z_new = np.vstack([c_new, G_new])
+    Z_new = torch.asarray(Z_new)
 
     return zonotope(Z_new)
 
@@ -116,6 +118,7 @@ def get_zonotope_from_box_geom(pos, rot, size):
     G = rot@np.diag(size)
 
     Z = np.vstack([c, G])
+    Z = torch.asarray(Z)
 
     return zonotope(Z)
 
@@ -135,6 +138,7 @@ def get_zonotope_from_cylinder_geom(pos, rot, size):
     c = pos
     G = rot@np.diag([size[0], size[0], size[1]])
     Z = np.vstack([c, G])
+    Z = torch.asarray(Z)
 
     return zonotope(Z)
 
@@ -153,6 +157,7 @@ def get_zonotope_from_sphere_geom(pos, rot, size):
     c = pos
     G = rot@np.diag([size[0], size[0], size[0]])
     Z = np.vstack([c, G])
+    Z = torch.asarray(Z)
 
     return zonotope(Z)
 
@@ -160,5 +165,6 @@ if __name__ == "__main__":
     c = np.array([1, 1, 1])
     G = np.eye(3)
     Z = zonotope(np.vstack([c, G]))
+    Z = torch.asarray(Z)
 
     Z_new = transform_zonotope(Z, pos=np.array([1, 2, 3]), rot=G)

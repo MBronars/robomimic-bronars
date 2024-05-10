@@ -17,10 +17,15 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
 from robomimic.envs.env_base import EnvBase
 from robomimic.algo import RolloutPolicy
+
 from safediffusion.utils.rand_utils import set_random_seed
+from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
+from safediffusion.safety_filter.base import SafetyFilter
 
 # TODO: 1) Analyze & imitate run_trained_agent.py
-def rollout_with_safety_filter(policy, safety_filter, env, horizon, render=False, video_writer=None, video_skip=5, camera_names=None):
+def rollout_with_safety_filter(policy, safety_filter, env, horizon, 
+                               render=False, video_writer=None, zono_video_writer=None, 
+                               video_skip=5, camera_names=None):
     """
     Args:
         policy: Peformance policy
@@ -41,19 +46,46 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon, render=False
     state_dict = env.get_state() # what does this return?
     obs = env.reset_to(state_dict)
 
+    safety_filter.start_episode()
+    safety_filter.env.render()
 
     results = {}
+    results["t_perf"] = []
+    results["t_safe"] = []
     video_count = 0
+    debug_video_count = 0
     total_reward = 0
     try:
         for step_i in range(horizon):
-            act = policy(ob=obs)
+            t_perf = time.time()
+            act_unsafe = policy(ob=obs)
+            actions    = policy.policy.action_sequence_ref.squeeze().detach().cpu().numpy()
+            t_perf = time.time() - t_perf
+            
+            t_safe = time.time()
             if safety_filter is not None:
-                act = safety_filter(obs, act)
+                act = safety_filter(actions)
+                act = act[0]
+            t_safe = time.time() - t_safe
+
+            # TODO: Hack
+            act = act_unsafe
+
+            # Visualize the zonotope world
+            if zono_video_writer is not None:
+                if debug_video_count % video_skip == 0:
+                    FRS_zonos = safety_filter.FO_zonos_sliced_at_param(safety_filter.ka_backup)
+                    video_img = safety_filter.env.render(FRS_zonos=FRS_zonos)
+                    zono_video_writer.append_data(video_img)
+                debug_video_count += 1
+
             next_obs, r, done, _ = env.step(act)
             total_reward += r
             success = env.is_success()["task"]
 
+            # synchronize zonotope twin world with the environment
+            safety_filter.env.sync()
+            
             if render:
                 env.render(mode="human", camera_name=camera_names[0])
             if video_writer is not None:
@@ -65,9 +97,12 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon, render=False
                     video_writer.append_data(video_img)
                 video_count += 1
             
+            results["t_perf"].append(t_perf)
+            results["t_safe"].append(t_safe)
+            
             if done or success:
                 break
-
+            
             obs = deepcopy(next_obs)
             state_dict = env.get_state()
 
@@ -80,40 +115,49 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon, render=False
 
 
 if __name__ == "__main__":
+    for rand_seed in [10, 13, 14, 38, 42, 68, 71, 126, 318]:
+    ########################################################
+    ############## User Arguments ##########################
+    ########################################################
+    # rand_seed = 318
+    # # rand_seed = 42
+    # rand_seed = 135
+        ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth")
+        rollout_horizon = 500
+        mujoco_video_path = f"diffusion_safety_rollout_{rand_seed}.mp4"
+        debug_video_path = f"diffusion_safety_rollout_debug_{rand_seed}.mp4"
+        
+        ########################################################
 
-    ############## User Arguments ###############
-    rand_seed = 4331
-    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300.pth")
-    rollout_horizon = 200
-    video_path = f"diffusion_safety_rollout_{rand_seed}.mp4"
-    #############################################
+        # Set up device
+        set_random_seed(rand_seed)
+        device = TorchUtils.get_torch_device(try_to_use_cuda=True)
 
-    # Set up device
-    set_random_seed(rand_seed)
-    device = TorchUtils.get_torch_device(try_to_use_cuda=True)
+        # restore policy and environment from checkpoint
+        policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
+        env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
+        mujoco_video_writer = imageio.get_writer(mujoco_video_path, fps=20)
+        zono_video_writer = imageio.get_writer(debug_video_path, fps=20)
 
-    # restore policy and environment from checkpoint
-    policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
-    
-    ############ Change Environment ##############
-    # change the PickPlace environment setting here (Refer to robosuite/PickPlace.py for more details)
-    # ckpt_dict["env_metadata"]["env_kwargs"]["single_object_mode"] = 1
-    # ckpt_dict["env_metadata"]["env_kwargs"]["render_camera"] = "robot0_eye_in_hand"
-    ##############################################
-    env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
+        # safety filter configuration
+        render_kwargs = {
+            "save_dir": f"figures/safety_rollout_{rand_seed}"
+        }
+        
+        zonotope_twin_env = ZonotopeMuJoCoEnv(env.env, render_online=True, ticks=True, render_kwargs=render_kwargs)
+        safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=1)
 
-    video_writer = imageio.get_writer(video_path, fps=20)
+        stats = rollout_with_safety_filter(
+            policy=policy,
+            safety_filter=safety_filter,
+            env=env,
+            horizon=rollout_horizon,
+            render=False,
+            video_writer=mujoco_video_writer,
+            zono_video_writer = zono_video_writer,
+            video_skip=5,
+            camera_names=["agentview"]
+        )
 
-    stats = rollout_with_safety_filter(
-        policy=policy,
-        safety_filter=None,
-        env=env,
-        horizon=rollout_horizon,
-        render=False,
-        video_writer=video_writer,
-        video_skip=5,
-        camera_names=["agentview"]
-    )
-
-    print(stats)
+        print(stats)
 

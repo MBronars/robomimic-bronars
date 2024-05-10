@@ -11,7 +11,8 @@ from robosuite.environments.base import MujocoEnv
 from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
-from zonopy.contset.zonotope.zono import zonotope
+# from zonopy.contset.zonotope.zono import zonotope
+from armtd.reachability.conSet.zonotope.zono import zonotope
 from enum import Enum, auto, unique
 
 import safediffusion.utils.reachability_utils as reach_utils
@@ -63,16 +64,22 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.hash_geom_ids()
 
         # construct zonotopes that is unchanged throughout the simulation
-        self._link_zonos_stl = self._Arm_3D__link_zonos
+        self._link_zonos_stl = self._Arm_3D__link_zonos # hack: to get the zonotopes from the parent class
+        self._link_polyzonos_stl = self.link_zonos # hack: to get the zonotopes from the parent class
         self._object_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.objects]
         self._visual_object_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.visual_objects]
         # self._gripper_zonos_stl = [self.zonotope_from_object_mesh_file(obj) for obj in self.env.robots[0].gripper]
+
+        # construct zonotopes with respect to the world frame
         self.arena_zonos = self.get_arena_zonotopes()
         self.mount_zonos = self.get_mount_zonotopes()
-        self.link_zonos = []
+        self.arm_zonos = []
         self.object_zonos = []
         self.gripper_zonos = []
         self.visual_object_zonos = []
+
+        # Construct the transformation matrix from the world to the base frame
+        self.T_world_to_base = self.get_transform_world_to_base()
 
         self.initialize_renderer()
 
@@ -111,7 +118,9 @@ class ZonotopeMuJoCoEnv(Arm_3D):
             ZP = None
         else:
             raise NotImplementedError("Not Implemented")
-
+        
+        if ZP is not None:
+            ZP = ZP.to(device=self.device, dtype=self.dtype)
         return ZP
     
     def zonotope_from_object_mesh_file(self, object):
@@ -137,7 +146,43 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         G = np.diag((max-min)/2)
         Z = np.vstack([c, G])
 
+        Z = torch.tensor(Z, dtype=self.dtype, device=self.device)
+
         return zonotope(Z)
+    
+    def get_arm_zonotopes(self, frame='world'):
+        return self.get_arm_zonotopes_at_q(self.qpos, frame=frame)
+
+    def get_arm_zonotopes_at_q(self, q, frame='world'):
+        """
+        Return the forward occupancy of the robot arms with the zonotopes.
+        It does by doing the forward kinematics of the robot.
+
+        Args
+            qpos: (n_links,) torch tensor
+
+        Output
+            arm_zonos: list of zonotopes
+        """
+        if frame == 'world':
+            Ri = torch.asarray(self.T_world_to_base[0:3, 0:3], dtype=self.dtype, device=self.device)
+            Pi = torch.asarray(self.T_world_to_base[0:3, 3], dtype=self.dtype, device=self.device)
+
+        elif frame == 'base':
+            Ri = torch.eye(3,dtype=self.dtype,device=self.device)
+            Pi = torch.zeros(3,dtype=self.dtype,device=self.device)
+        else:
+            raise NotImplementedError("Not Implemented")
+        
+        R_qi = self.rot(q)
+        arm_zonos = []
+        for i in range(self.n_links):
+            Pi = Ri@self.P0[i] + Pi
+            Ri = Ri@self.R0[i]@R_qi[i]
+            arm_zono = Ri@self._link_zonos_stl[i] + Pi
+            arm_zonos.append(arm_zono)
+        
+        return arm_zonos
     
     def get_arena_zonotopes(self):
         """
@@ -227,6 +272,17 @@ class ZonotopeMuJoCoEnv(Arm_3D):
             return True
         return False
     
+    ##########################################
+    # Transforms
+    ##########################################
+    def get_transform_world_to_base(self):
+        T_world_to_base = np.zeros((4, 4))
+        T_world_to_base[0:3, 0:3] = self.env.sim.data.get_body_xmat("robot0_base")
+        T_world_to_base[0:3, 3]   = self.env.sim.data.get_body_xpos("robot0_base")
+        T_world_to_base[3, 3] = 1
+
+        return T_world_to_base
+    
     ###############################
     ###### GETTER FUNCTIONS  ######
     ###############################
@@ -241,7 +297,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         return qvel
     
     def get_num_geom(self):
-        return self.env.sim.model.geom_type.shape[0]
+        return self.env.sim.model.ngeom
     
     def get_body_name_from_geom_id(self, geom_id):
         body_id = self.env.sim.model.geom_bodyid[geom_id]
@@ -256,67 +312,47 @@ class ZonotopeMuJoCoEnv(Arm_3D):
             geom_info[geom_id]["body_name"] = self.get_body_name_from_geom_id(geom_id)
 
         return geom_info
-
-    ###############################
-    #### KINEMATICS ###############
-    ###############################
-    def zono_FO(self, qpos):
-        """
-        Return the forward occupancy of the robot links with the zonotopes.
-        It does by doing the forward kinematics of the robot.
-
-        Args
-            qpos: (n_links,) torch tensor
-
-        Output
-            link_zonos: list of zonotopes
-        """
-        R_qi = self.rot(qpos)
-        Ri = torch.eye(3,dtype=self.dtype,device=self.device)
-        Pi = torch.zeros(3,dtype=self.dtype,device=self.device)
-
-        # TODO: START HERE
-        Ri = torch.asarray(self.env.sim.data.get_body_xmat('robot0_base'), dtype=self.dtype,device=self.device)
-        Pi = torch.asarray(self.env.sim.data.get_body_xpos('robot0_base'), dtype=self.dtype,device=self.device)
-
-        link_zonos = []
-        for i in range(self.n_links):
-            Pi = Ri@self.P0[i] + Pi
-            Ri = Ri@self.R0[i]@R_qi[i]
-            link_zono = Ri@self._link_zonos_stl[i] + Pi
-            link_zonos.append(link_zono)
-        
-        return link_zonos
     
     ################################
     # Env Template Functions
     ################################
     def reset(self):
+        raise NotImplementedError
+    
+    def sync(self):
         """
         Reset - synchronize with the MuJoCo environment
         """
         # TODO 1. self.qgoal = update the position of the goal according to the mode (pick, place)
-        
         # sync the robot state with the mujoco env
         self.qpos = self.get_qpos_from_sim()
         self.qvel = self.get_qvel_from_sim()
+        self.qgoal = np.zeros(self.n_links,) # TODO: change this to the object to place & pick using inverse kinematics
 
-        # sync the zonotopes
-        self.link_zonos = self.zono_FO(self.qpos)
+        # sync the zonotopes for visualization (all frame is respect to the world frame)
+        self.arm_zonos = self.get_arm_zonotopes(frame='world')
         self.gripper_zonos = self.get_gripper_zonotopes()
         self.object_zonos = self.get_object_zonotopes()
         self.visual_object_zonos = self.get_visual_object_zonotopes()
+
+        # TODO: construct obstacle flag and add obstacles here
+        obs_zonos = []
+        # obs_zonos.extend(self.arena_zonos)
+        obs_zonos.extend(self.mount_zonos)
+        # obs_zonos.extend(self.object_zonos)
+        self.obs_zonos = obs_zonos
         
         # reset the internal status
         self.done = False
         self.collision = False
 
-
         return self.get_observations()
     
     def step(self, action):
-        obs, reward, done, info = super().step(action)
-        return obs, reward, done, info
+        """
+        Step function is not available for the zonotope environment
+        """
+        raise NotImplementedError("Not Implemented")
     
     def close(self):
         super().close()
@@ -355,10 +391,11 @@ class ZonotopeMuJoCoEnv(Arm_3D):
                 os.makedirs(self.render_kwargs["save_dir"], exist_ok=True)
 
         # Initialize the patches for the robots, objects, arenas (fixed throughout the simulation)
-        self.link_patches = self.ax.add_collection3d(Poly3DCollection([]))
+        self.arm_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.gripper_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.object_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.visual_object_patches = self.ax.add_collection3d(Poly3DCollection([]))
+        self.FRS_patches = self.ax.add_collection3d(Poly3DCollection([]))
 
         arena_patches_data = torch.vstack([arena_zono.polyhedron_patch() for arena_zono in self.arena_zonos])
         self.arena_patches = self.ax.add_collection3d(Poly3DCollection(arena_patches_data, 
@@ -383,7 +420,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
         
-    def render(self):
+    def render(self, FRS_zonos=None):
         # Vis settings here
         robot_color = 'black'
         robot_alpha = 0.5
@@ -401,14 +438,19 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         visual_object_alpha = 0.2
         visual_object_linewidth = 1
 
+        FRS_color = 'yellow'
+        FRS_alpha = 0.03
+        FRS_linewidth = 0.01
+
         # clear all the previous patches
-        self.link_patches.remove()
+        self.arm_patches.remove()
         self.gripper_patches.remove()
         self.object_patches.remove()
+        self.visual_object_patches.remove()
         
-        # Render the robot
-        link_patches_data = torch.vstack([link_zono.polyhedron_patch() for link_zono in self.link_zonos])
-        self.link_patches = self.ax.add_collection3d(Poly3DCollection(link_patches_data, 
+        # Render the robot links and gripper
+        arm_patches_data = torch.vstack([arm_zono.polyhedron_patch() for arm_zono in self.arm_zonos])
+        self.arm_patches = self.ax.add_collection3d(Poly3DCollection(arm_patches_data, 
                                                                       edgecolor=robot_color, 
                                                                       facecolor=robot_color, 
                                                                       alpha=robot_alpha, 
@@ -437,13 +479,30 @@ class ZonotopeMuJoCoEnv(Arm_3D):
                                                                         alpha=visual_object_alpha, 
                                                                         linewidths=visual_object_linewidth))
         
-        # Render the arena        
+        if FRS_zonos is not None:
+            self.FRS_patches.remove()
+            FRS_to_vis = []
+            for FRS_link in FRS_zonos:
+                FRS_to_vis.extend(FRS_link[0:-1:10])
+            FRS_patches_data = torch.vstack([obj.polyhedron_patch() for obj in FRS_to_vis])
+            self.FRS_patches = self.ax.add_collection3d(Poly3DCollection(FRS_patches_data, 
+                                                                        edgecolor=FRS_color, 
+                                                                        facecolor=FRS_color, 
+                                                                        alpha=FRS_alpha, 
+                                                                        linewidths=FRS_linewidth))
+
+        # Flush and re-draw      
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
         # Save the figure
         if self.render_kwargs is not None and "save_dir" in self.render_kwargs:
             plt.savefig(os.path.join(self.render_kwargs["save_dir"], f"task.png"))
+        
+
+        img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype='uint8')
+        img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3,))
+        return img
 
 
 #########

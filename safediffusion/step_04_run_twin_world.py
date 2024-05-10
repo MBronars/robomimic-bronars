@@ -46,13 +46,7 @@ if __name__ == "__main__":
     zono_env.reset()
     zono_env.render()
 
-    for i in range(5000):        
-        # if i % 1000 == 0:
-        #     env.reset()
-        #     env.viewer.set_camera(camera_id=2)
-        #     zono_env.reset()
-        #     zono_env.render()
-
+    for i in range(5000):
         env.step(np.zeros(env.action_dim))
         obs = env.render()
         
