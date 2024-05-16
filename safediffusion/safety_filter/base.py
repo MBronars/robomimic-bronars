@@ -32,8 +32,38 @@ class ReferenceTrajectory:
         self.x_des = x_des
         self.dx_des = dx_des
 
+    def __getitem__(self, key):
+        """ 
+        Returns another ReferenceTrajectory object with the sliced data
+        """
+        if isinstance(key, slice):
+            return ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+        
+        elif isinstance(key, int):
+            if key < 0:
+                key = len(self) + key
+            if key >= self.__len__():
+                raise IndexError("Index out of range")
+            return (self.t_des[key], self.x_des[key], self.dx_des[key])
+        
+        elif isinstance(key, (list, torch.Tensor)) and key.dtype == torch.bool:
+            # Handle boolean array masking
+            if len(key) != len(self.t_des):
+                raise ValueError("Boolean mask must have the same length as the reference trajectory")
+
+            return ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+
+        else:
+            raise TypeError("Invalid argument type")
+        
     def __len__(self):
         return self.t_des.shape[0]
+    
+    def set_start_time(self, t_start = 0):
+        """
+        Shift the time vector to start from t_start
+        """
+        self.t_des = self.t_des - self.t_des[0] + t_start
 
 class SafetyFilter:
     """
@@ -143,6 +173,9 @@ class SafetyFilter:
     def __call__(self, actions):
         """
         Assume diffusion model gives joint position as actions
+
+        Args
+            actions: tensor shape of (N_horizon, action_dim), joint angle changes. last dim includes gripper actions.
         """
         traj_des = self.actions_to_reference_traj(actions)
         (is_safe, backup_plan) = self.monitor(traj_des)
@@ -207,8 +240,8 @@ class SafetyFilter:
         self.n_pos_lim = int(zono_env.lim_flag.sum().cpu())
         self.lim_flag = zono_env.lim_flag.cpu()
 
-    def check_head_plan_safety(self, t, x, dx):
-        """ Check if the head plan is safe
+    def check_head_plan_safety(self, plan):
+        """ Check if the plan is safe
         
         Args:
             t: The time vector of the head plan
@@ -217,13 +250,14 @@ class SafetyFilter:
         Returns:
             bool: True if the head plan is safe, False otherwise
         """
-
-        is_colliding = self.env.collision_check(x)
-        is_exceeding_joint_limit = self.env.joint_limit_check_with_explicit_plans(t, x, dx)
+        is_colliding = self.env.collision_check(qs=plan.x_des)
+        is_exceeding_joint_limit = self.env.joint_limit_check_with_explicit_plans(t_des=plan.t_des, 
+                                                                                  x_des=plan.x_des, 
+                                                                                  dx_des=plan.dx_des)
 
         return not is_colliding and not is_exceeding_joint_limit
     
-    def check_backup_plan_feasibility(self, t, x, dx):
+    def check_backup_plan_feasibility(self, plan):
         """ Check if the safe backup plan is feasible
         
         Args:
@@ -235,6 +269,10 @@ class SafetyFilter:
             bool: True if the tail plan is safe, False otherwise
         """
         # prepare constraints for NLP
+        x = plan.x_des
+        dx = plan.dx_des
+        t = plan.t_des
+
         self.prepare_constraints(x[0], dx[0], self.env.obs_zonos)
 
         # trajectory optimization
@@ -321,22 +359,19 @@ class SafetyFilter:
         # TODO: Implement checking first criterion: head plan feasibility
         # Naive checker for now: collision checking
         head_mask = traj_des.t_des <= (self.dt_plan * self.n_head)
-        head_time = traj_des.t_des[head_mask].cpu()
-        head_vel = traj_des.dx_des[head_mask].cpu()
-        head_pos = traj_des.x_des[head_mask].cpu()
+        head_plan = traj_des[head_mask]
 
-        is_head_plan_safe = self.check_head_plan_safety(t=head_time, x=head_pos, dx=head_vel)
+        is_head_plan_safe = self.check_head_plan_safety(head_plan)
 
         if not is_head_plan_safe:
             print("[INFO] Head plan is not safe")
 
         # TODO: Implement second criterion: tail backup plan feasibility
         tail_mask = traj_des.t_des >= (self.dt_plan * self.n_head)
-        tail_pos = traj_des.x_des[tail_mask].cpu()
-        tail_time = traj_des.t_des[tail_mask].cpu() - traj_des.t_des[tail_mask][0].cpu()
-        tail_vel = traj_des.dx_des[tail_mask].cpu()
+        tail_plan = traj_des[tail_mask]
+        tail_plan.set_start_time(0)
 
-        (is_backup_plan_feasible, backup_plan) = self.check_backup_plan_feasibility(t=tail_time, x=tail_pos, dx=tail_vel)
+        (is_backup_plan_feasible, backup_plan) = self.check_backup_plan_feasibility(tail_plan)
 
         is_safe = is_head_plan_safe and is_backup_plan_feasible
 
@@ -497,10 +532,6 @@ class SafetyFilter:
                         p.Jac = Jac.numpy()
                         p.x_prev = np.copy(x) 
                 
-                # except Exception as e:
-                #     raise e
-
-
             def intermediate(p, alg_mod, iter_count, obj_value, inf_pr, inf_du, mu,
                      d_norm, regularization_size, alpha_du, alpha_pr,
                      ls_trials):
@@ -528,9 +559,20 @@ class SafetyFilter:
         flag  = self.info['status']
 
         return k_opt, flag
+    
+    ###################################################
+    # Zonotope Environment Biniding uitls
+    ###################################################
+    def sync_env(self):
+        """
+        Synchronize the zonotope environment with the simulation environment
+
+        Returns the observation from the zonotope world
+        """
+        return self.env.sync()
 
     ###################################################
-    ###########      Utils                     ########
+    # Utils
     ###################################################
     def wrap_cont_joint_to_pi(self,phases):
         if len(phases.shape) == 1:

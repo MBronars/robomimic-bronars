@@ -26,17 +26,18 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
                                video_skip=5, camera_names=None):
     """
     Args:
-        policy: Peformance policy
-        safety_filter: Safety Filter
-        env: Environment
-        horizon: int
-        render: bool
+        policy: performance policy
+        safety_filter: safety filter
+        env: (robosuite environment) environment to interact with MuJoCo
+        horizon: (int)
+        render: (bool)
         video_writer: VideoWriter
         video_skip: int
         camera_names: list
     """
     assert isinstance(env, EnvBase)
     assert isinstance(policy, RolloutPolicy)
+    assert isinstance(safety_filter, SafetyFilter)
     assert not (render and (video_writer is not None))
 
     policy.start_episode()
@@ -56,18 +57,20 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
     total_reward = 0
     try:
         for step_i in range(horizon):
-            t_perf = time.time()
+            # The performance policy should return a sequence of the joint positions
+            # Shape of (T, D)
+            t_perf     = time.time()
             act_unsafe = policy(ob=obs)
             actions    = policy.policy.action_sequence_ref.squeeze().detach().cpu().numpy()
-            t_perf = time.time() - t_perf
+            t_perf     = time.time() - t_perf
             
             if safety_filter is not None:
                 t_safe = time.time()
-                act = safety_filter(actions)
-                act = act[0]
+                act    = safety_filter(actions)
+                act    = act[0]
                 t_safe = time.time() - t_safe
             
-            # TODO: Hack
+            # TODO: Hack: now we are using the unsafe action just to roll out the environment
             act = act_unsafe
 
             # Visualize the zonotope world
@@ -76,7 +79,6 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
                     FRS_zonos = safety_filter.FO_zonos_sliced_at_param(safety_filter.ka_backup)
                     FO_desired = safety_filter.forward_occupancy_from_reference_traj(safety_filter.actions_to_reference_traj(actions), only_end_effector=True)
                     video_img = safety_filter.env.render(FRS_zonos=FRS_zonos, FO_desired_zonos=FO_desired)
-                    # video_img = safety_filter.env.render()
                     zono_video_writer.append_data(video_img)
                 debug_video_count += 1
 
@@ -85,7 +87,7 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
             success = env.is_success()["task"]
 
             # synchronize zonotope twin world with the environment
-            safety_filter.env.sync()
+            safety_filter.sync_env()
             
             if render:
                 env.render(mode="human", camera_name=camera_names[0])
