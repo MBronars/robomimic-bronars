@@ -1,13 +1,15 @@
+import os
 import sys
-import time
 
 import torch
 import numpy as np
 import cyipopt
 
-sys.path.append('../')
-
-from zonopy.contset import batchZonotope
+use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
+if use_zonopy:
+    from zonopy.contset import batchZonotope
+else:
+    from armtd.reachability.conSet import batchZonotope
 
 from armtd.reachability.forward_occupancy.FO import forward_occupancy
 from armtd.reachability.joint_reachable_set.load_jrs_trig import preload_batch_JRS_trig

@@ -18,6 +18,7 @@ from robomimic.algo import RolloutPolicy
 from safediffusion.utils.rand_utils import set_random_seed
 from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
 from safediffusion.safety_filter.base import SafetyFilter
+from safediffusion.utils.io_utils import RESULT_DIR
 
 # TODO: 1) Analyze & imitate run_trained_agent.py
 def rollout_with_safety_filter(policy, safety_filter, env, horizon, 
@@ -115,38 +116,35 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
 
 
 if __name__ == "__main__":
-    for rand_seed in [10, 13, 14, 38, 42, 68, 71, 126, 318]:
+    """
+    User Arguments
+        rand_seeds: scenario lists
+        ckpt_path : path to the checkpoint of diffusion policy
+        rollout_horizon: int
+    """
+    rand_seeds = [10, 13, 14, 38, 42, 68, 71, 126, 318]
+    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth")
+    rollout_horizon = 500
     ########################################################
-    ############## User Arguments ##########################
-    ########################################################
-    # rand_seed = 318
-    # # rand_seed = 42
-    # rand_seed = 135
-        ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth")
-        rollout_horizon = 500
-        mujoco_video_path = f"diffusion_safety_rollout_{rand_seed}.mp4"
-        debug_video_path = f"diffusion_safety_rollout_debug_{rand_seed}.mp4"
-        
-        ########################################################
 
-        # Set up device
+    device = TorchUtils.get_torch_device(try_to_use_cuda=True)
+
+    for rand_seed in rand_seeds:
         set_random_seed(rand_seed)
-        device = TorchUtils.get_torch_device(try_to_use_cuda=True)
-
-        # restore policy and environment from checkpoint
+        result_dir = f"{RESULT_DIR}/scenario_{rand_seed}"
+        os.makedirs(result_dir, exist_ok=True)
+        
+        # diffusion policy configuration
         policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
         env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
-        mujoco_video_writer = imageio.get_writer(mujoco_video_path, fps=20)
-        zono_video_writer = imageio.get_writer(debug_video_path, fps=20)
-
-        # safety filter configuration
-        render_kwargs = {
-            "save_dir": f"figures/safety_rollout_{rand_seed}"
-        }
+        mujoco_video_writer = imageio.get_writer(f"{result_dir}/mujoco.mp4", fps=20)
         
-        zonotope_twin_env = ZonotopeMuJoCoEnv(env.env, render_online=True, ticks=True, render_kwargs=render_kwargs)
+        # safety filter configuration
+        zonotope_twin_env = ZonotopeMuJoCoEnv(env.env, render_online=True, ticks=True)
         safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=1)
+        zono_video_writer = imageio.get_writer(f"{result_dir}/zonotwin.mp4", fps=20)
 
+        # run simulation
         stats = rollout_with_safety_filter(
             policy=policy,
             safety_filter=safety_filter,
