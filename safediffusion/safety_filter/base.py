@@ -9,12 +9,12 @@ use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
     from zonopy.contset import batchZonotope
 else:
-    from armtd.reachability.conSet import batchZonotope
+    from safediffusion.armtdpy.reachability.conSet import batchZonotope
 
-from armtd.reachability.forward_occupancy.FO import forward_occupancy
-from armtd.reachability.joint_reachable_set.load_jrs_trig import preload_batch_JRS_trig
-from armtd.reachability.joint_reachable_set.process_jrs_trig import process_batch_JRS_trig
-from armtd.planning.armtd_3d import wrap_to_pi
+from safediffusion.armtdpy.reachability.forward_occupancy.FO import forward_occupancy
+from safediffusion.armtdpy.reachability.joint_reachable_set.load_jrs_trig import preload_batch_JRS_trig
+from safediffusion.armtdpy.reachability.joint_reachable_set.process_jrs_trig import process_batch_JRS_trig
+from safediffusion.armtdpy.planning.armtd_3d import wrap_to_pi
 
 from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
 

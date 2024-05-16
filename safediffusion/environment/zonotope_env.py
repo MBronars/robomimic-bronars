@@ -12,13 +12,14 @@ from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
 
-from armtd.environments.arm_3d import Arm_3D
+
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
     from zonopy.contset import zonotope
 else:
-    from armtd.reachability.conSet import zonotope
+    from safediffusion.armtdpy.reachability.conSet import zonotope
 
+from safediffusion.armtdpy.environments.arm_3d import Arm_3D
 import safediffusion.utils.reachability_utils as reach_utils
 
 

@@ -12,7 +12,7 @@ use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
     from zonopy.contset import zonotope
 else:
-    from armtd.reachability.conSet import zonotope
+    from safediffusion.armtdpy.reachability.conSet import zonotope
 
 
 def transform_zonotope(zono, pos, rot):
