@@ -46,8 +46,9 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
     state_dict = env.get_state() # what does this return?
     obs = env.reset_to(state_dict)
 
-    safety_filter.start_episode()
-    safety_filter.env.render()
+    if safety_filter is not None:
+        safety_filter.start_episode()
+        safety_filter.env.render()
 
     results = {}
     results["t_perf"] = []
@@ -62,12 +63,12 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
             actions    = policy.policy.action_sequence_ref.squeeze().detach().cpu().numpy()
             t_perf = time.time() - t_perf
             
-            t_safe = time.time()
             if safety_filter is not None:
+                t_safe = time.time()
                 act = safety_filter(actions)
                 act = act[0]
-            t_safe = time.time() - t_safe
-
+                t_safe = time.time() - t_safe
+            
             # TODO: Hack
             act = act_unsafe
 
@@ -75,7 +76,9 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
             if zono_video_writer is not None:
                 if debug_video_count % video_skip == 0:
                     FRS_zonos = safety_filter.FO_zonos_sliced_at_param(safety_filter.ka_backup)
-                    video_img = safety_filter.env.render(FRS_zonos=FRS_zonos)
+                    FO_desired = safety_filter.forward_occupancy_from_reference_traj(safety_filter.actions_to_reference_traj(actions), only_end_effector=True)
+                    video_img = safety_filter.env.render(FRS_zonos=FRS_zonos, FO_desired_zonos=FO_desired)
+                    # video_img = safety_filter.env.render()
                     zono_video_writer.append_data(video_img)
                 debug_video_count += 1
 

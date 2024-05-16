@@ -81,6 +81,10 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         # Construct the transformation matrix from the world to the base frame
         self.T_world_to_base = self.get_transform_world_to_base()
 
+        # simulation objects to query the information: should be used only for getter functions
+        self.helper_robot = self.env.robots[0]
+        self.helper_controller = self.helper_robot.controller
+
         self.initialize_renderer()
 
     def hash_geom_ids(self):
@@ -337,7 +341,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
 
         # TODO: construct obstacle flag and add obstacles here
         obs_zonos = []
-        # obs_zonos.extend(self.arena_zonos)
+        obs_zonos.extend(self.arena_zonos)
         obs_zonos.extend(self.mount_zonos)
         # obs_zonos.extend(self.object_zonos)
         self.obs_zonos = obs_zonos
@@ -395,7 +399,8 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.gripper_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.object_patches = self.ax.add_collection3d(Poly3DCollection([]))
         self.visual_object_patches = self.ax.add_collection3d(Poly3DCollection([]))
-        self.FRS_patches = self.ax.add_collection3d(Poly3DCollection([]))
+        self.FRS_patches = self.ax.add_collection3d(Poly3DCollection([])) # FRS patches of the backup plan
+        self.FO_desired_patches = self.ax.add_collection3d(Poly3DCollection([]))
 
         arena_patches_data = torch.vstack([arena_zono.polyhedron_patch() for arena_zono in self.arena_zonos])
         self.arena_patches = self.ax.add_collection3d(Poly3DCollection(arena_patches_data, 
@@ -420,7 +425,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
         
-    def render(self, FRS_zonos=None):
+    def render(self, FRS_zonos=None, FO_desired_zonos=None):
         # Vis settings here
         robot_color = 'black'
         robot_alpha = 0.5
@@ -441,6 +446,10 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         FRS_color = 'yellow'
         FRS_alpha = 0.03
         FRS_linewidth = 0.01
+
+        FO_desired_color = 'cyan'
+        FO_desired_alpha = 0.7
+        FO_desired_linewidth = 0.05
 
         # clear all the previous patches
         self.arm_patches.remove()
@@ -480,16 +489,29 @@ class ZonotopeMuJoCoEnv(Arm_3D):
                                                                         linewidths=visual_object_linewidth))
         
         if FRS_zonos is not None:
+            FRS_render_freq = 10
             self.FRS_patches.remove()
             FRS_to_vis = []
             for FRS_link in FRS_zonos:
-                FRS_to_vis.extend(FRS_link[0:-1:10])
+                FRS_to_vis.extend(FRS_link[0:-1:FRS_render_freq])
             FRS_patches_data = torch.vstack([obj.polyhedron_patch() for obj in FRS_to_vis])
             self.FRS_patches = self.ax.add_collection3d(Poly3DCollection(FRS_patches_data, 
                                                                         edgecolor=FRS_color, 
                                                                         facecolor=FRS_color, 
                                                                         alpha=FRS_alpha, 
                                                                         linewidths=FRS_linewidth))
+        
+        if FO_desired_zonos is not None:
+            self.FO_desired_patches.remove()
+            FO_desired_to_vis = []
+            for FO_desired_zonos_at_t in FO_desired_zonos:
+                FO_desired_to_vis.extend(FO_desired_zonos_at_t)
+            FO_desired_patches_data = torch.vstack([obj.polyhedron_patch() for obj in FO_desired_to_vis])
+            self.FO_desired_patches = self.ax.add_collection3d(Poly3DCollection(FO_desired_patches_data, 
+                                                                        edgecolor=FO_desired_color, 
+                                                                        facecolor=FO_desired_color, 
+                                                                        alpha=FO_desired_alpha, 
+                                                                        linewidths=FO_desired_linewidth))
 
         # Flush and re-draw      
         self.fig.canvas.draw()

@@ -15,13 +15,13 @@ from armtd.planning.armtd_3d import wrap_to_pi
 
 from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
 
-# T_PLAN = 0.5
-# T_FULL = 1.0
-
-T_PLAN = 0.2
-T_FULL = 0.5
+# Change this along with the n_timestepss
+T_PLAN = 0.5
+T_FULL = 1.0
 
 class ReferenceTrajectory:
+    # TODO: overload the indexing operator, slicing operator and change the dtype and device
+    # TODO: change the code accordingly for the safety filter
     def __init__(self, t_des, x_des, dx_des):
         assert t_des.shape[0] == x_des.shape[0] == dx_des.shape[0]
 
@@ -29,7 +29,13 @@ class ReferenceTrajectory:
         self.x_des = x_des
         self.dx_des = dx_des
 
+    def __len__(self):
+        return self.t_des.shape[0]
+
 class SafetyFilter:
+    """
+    TODO: convert back-and-forth between parameter, referencetrajectory, action
+    """
     def __init__(self, zono_env,
                  zono_order=40,
                  max_combs=200,
@@ -70,39 +76,44 @@ class SafetyFilter:
 
     def actions_to_reference_traj(self, actions):
         """
-        Map the actions from the performance policy to the trajectory in joint-space.
-        The actions might include gripper actions which is not filtered by safety filter.
+        Map the actions from the performance policy to the time-parameterized trajectory for safety filter.
+        Some dimension of actions might include gripper actions which is not filtered by safety filter.
 
         Args
             actions: tensor shape of (N_horizon, action_dim), joint angle changes
 
         Output
-            t_des:
-            x_des: joint angles (N_horizon, N_joint)
-            dx_des: joint velocities (N_horizon, N_joint)
+            reference_traj: ReferenceTrajectory object that has t_des, x_des, dx_des
+
+        TODO: Few Questions to think about:
+            1) Does the horizon of the performance policy influences optimization?
+            2) What should be the appropriate dtype and device?
+
+        Author: Wonsuhk Jung
         """
         n_actions = actions.shape[0]
 
-        # t_des
-        t_des = torch.arange(0, n_actions*self.dt_plan, self.dt_plan, dtype=self.dtype, device=self.device)
+        # Step 1. Parse actions related to the joint space
+        actions = actions[:, self.env.helper_controller.qpos_index]
 
-        # compute dx_des
-        # TODO: REMOVE 0.05 AND UNCOMMENT THE BELOW CODE
-        LLC = self.env.env.robots[0].controller
-        actions = actions[:, LLC.qpos_index]
-        actions = actions
-
-        # scale actions
+        # Step 2. Compute dx_des from actions
+        # TODO: Scaling factor 0.05 is hardcoded for now, remove this later
+        # scale actions to velocity
         actions = actions*0.05
         # actions = np.clip(actions, LLC.input_min, LLC.input_max)
         # actions = (actions - LLC.action_input_transform) * LLC.action_scale + LLC.action_output_transform
+
         dx_des = actions/self.dt_plan
         dx_des = torch.asarray(dx_des, dtype=self.dtype, device=self.device)
 
+        # x_des
         x_cur = self.env.qpos
         x_des = x_cur + np.cumsum(actions[:-1], 0)
         x_des = np.vstack([x_cur, x_des])
         x_des = torch.asarray(x_des, dtype=self.dtype, device=self.device)
+
+        # t_des
+        t_des = torch.arange(0, n_actions*self.dt_plan, self.dt_plan, dtype=self.dtype, device=self.device)
 
         reference_plan = ReferenceTrajectory(t_des, x_des, dx_des)
         
@@ -110,14 +121,16 @@ class SafetyFilter:
     
     def reference_traj_to_actions(self, traj):
         """
-        Process reference trajectory back to the actions for robosuite environment
+        Map the reference trajectory back to the actions for robosuite environment
+        This does by computing the difference between the joint angles and scaling it back to the action space
         """
         assert isinstance(traj, ReferenceTrajectory)
-        
+
         # TODO: change 0.05 part later
         actions = traj.x_des[1:] - traj.x_des[:-1]
-        LLC = self.env.env.robots[0].controller
         actions = actions/0.05
+
+        # LLC = self.env.helper_controller
         # actions = (actions-LLC.action_output_transform)/LLC.action_scale + LLC.action_input_transform
         # actions = np.clip(actions, LLC.input_min, LLC.input_max)
         actions = torch.asarray(actions, dtype=self.dtype, device=self.device)
@@ -132,14 +145,32 @@ class SafetyFilter:
         (is_safe, backup_plan) = self.monitor(traj_des)
 
         if is_safe:
-            actions = actions[:self.n_head]
+            actions_safe = actions[:self.n_head]
             self.backup_actions = self.reference_traj_to_actions(backup_plan)
 
         else:
-            actions = self.backup_actions[:self.n_head]
-            self.backup_actions = actions[self.n_head:]
+            actions_safe = self.backup_actions[:self.n_head]
+            self.backup_actions = self.backup_actions[self.n_head:]
 
-        return actions
+        return actions_safe
+    
+    def forward_occupancy_from_reference_traj(self, traj, only_end_effector=False):
+        """
+        Compute the forward occupancy from the reference trajectory
+
+        TODO: change this to the batch zonotope version
+        """
+        assert isinstance(traj, ReferenceTrajectory)
+
+        FO_link = []
+
+        for i in range(len(traj)):
+            FO_i = self.env.get_arm_zonotopes_at_q(traj.x_des[i])
+            if only_end_effector:
+                FO_i = [FO_i[-1]]
+            FO_link.append(FO_i)
+
+        return FO_link
     
     def start_episode(self):
         self.env.sync()
