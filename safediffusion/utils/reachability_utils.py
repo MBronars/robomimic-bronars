@@ -5,9 +5,8 @@ import matplotlib.pyplot as plt
 from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
-# from zonopy.contset.zonotope.zono import zonotope
 
-from armtd.reachability.conSet.zonotope.zono import zonotope
+from zonopy.contset import zonotope
 
 
 def transform_zonotope(zono, pos, rot):

@@ -7,7 +7,8 @@ import cyipopt
 
 sys.path.append('../')
 
-from armtd.reachability.conSet import batchZonotope
+from zonopy.contset import batchZonotope
+
 from armtd.reachability.forward_occupancy.FO import forward_occupancy
 from armtd.reachability.joint_reachable_set.load_jrs_trig import preload_batch_JRS_trig
 from armtd.reachability.joint_reachable_set.process_jrs_trig import process_batch_JRS_trig

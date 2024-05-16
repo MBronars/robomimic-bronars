@@ -1,4 +1,5 @@
 import os
+from enum import Enum
 
 import torch
 import numpy as np
@@ -6,14 +7,14 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from stl import mesh
 
-from armtd.environments.arm_3d import Arm_3D
 from robosuite.environments.base import MujocoEnv
 from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
-# from zonopy.contset.zonotope.zono import zonotope
-from armtd.reachability.conSet.zonotope.zono import zonotope
-from enum import Enum, auto, unique
+
+from armtd.environments.arm_3d import Arm_3D
+from zonopy.contset import zonotope
+
 
 import safediffusion.utils.reachability_utils as reach_utils
 
