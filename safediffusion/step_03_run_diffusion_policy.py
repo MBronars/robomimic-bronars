@@ -16,6 +16,25 @@ import robomimic.utils.obs_utils as ObsUtils
 from robomimic.envs.env_base import EnvBase
 from robomimic.algo import RolloutPolicy
 from safediffusion.utils.rand_utils import set_random_seed
+from safediffusion.utils.io_utils import RESULT_DIR
+
+def overwrite_controller_to_joint_position(ckpt_dict):
+    ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
+        "type": "JOINT_POSITION",
+        "input_max": 1,
+        "input_min": -1,
+        "output_max": 0.05,
+        "output_min": -0.05,
+        "kp": 50,
+        "damping_ratio": 1,
+        "impedance_mode": "fixed",
+        "kp_limits": [0, 300],
+        "damping_ratio_limits": [0, 10],
+        "qpos_limits": None,
+        "interpolation": None,
+        "ramp_ratio": 0.2
+        }
+    return ckpt_dict
 
 
 def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5, camera_names=None):
@@ -74,20 +93,23 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
 if __name__ == "__main__":
     ############# User Parameter ##############
     rand_seeds = np.array(np.random.random(50)*500,dtype=int)
+    rand_seeds = [11, 63, 307, 363, 366, 408, 413]
     # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300.pth") # policy checkpoint
-    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth") # policy checkpoint
-    rollout_horizon = 1000
+    # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth") # policy checkpoint
+    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300_joint_actions.pth") # policy checkpoint
+    rollout_horizon = 750
     ###########################################
 
     for rand_seed in rand_seeds:
-        video_path = f"diffusion_rollout_{rand_seed}.mp4"
+        result_dir = f"{RESULT_DIR}/scenario_{rand_seed}"
+        os.makedirs(result_dir, exist_ok=True)
         # Set random seed
         set_random_seed(rand_seed)
         # Set up device
         device = TorchUtils.get_torch_device(try_to_use_cuda=True)
         # restore policy and environment from checkpoint
         policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
-        
+        ckpt_dict = overwrite_controller_to_joint_position(ckpt_dict)
         ############ Change Environment ##############
         # change the PickPlace environment setting here (Refer to robosuite/PickPlace.py for more details)
         # ckpt_dict["env_metadata"]["env_kwargs"]["single_object_mode"] = 1
@@ -95,7 +117,7 @@ if __name__ == "__main__":
         ##############################################
         env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
 
-        video_writer = imageio.get_writer(video_path, fps=20)
+        video_writer = imageio.get_writer(f"{result_dir}/DPmujoco.mp4", fps=20)
 
         stats = rollout(
             policy=policy,

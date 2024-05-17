@@ -18,19 +18,31 @@ from safediffusion.armtdpy.planning.armtd_3d import wrap_to_pi
 
 from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
 
+from safediffusion.utils.npy_utils import scale_array_from_A_to_B
+
 # Change this along with the n_timestepss
 T_PLAN = 0.5
 T_FULL = 1.0
 
 class ReferenceTrajectory:
-    # TODO: overload the indexing operator, slicing operator and change the dtype and device
+    # TODO: change the dtype and device
     # TODO: change the code accordingly for the safety filter
-    def __init__(self, t_des, x_des, dx_des):
-        assert t_des.shape[0] == x_des.shape[0] == dx_des.shape[0]
+    def __init__(self, t_des, x_des, dx_des=None):
+        assert t_des.shape[0] == x_des.shape[0]
 
-        self.t_des = t_des
-        self.x_des = x_des
-        self.dx_des = dx_des
+        if dx_des is None:
+            # If dx_des is not provided, compute it from x_des using forward difference
+            dt_des = (t_des[1:] - t_des[:-1]).unsqueeze(-1)
+            self.dx_des = (x_des[1:] - x_des[:-1])/dt_des
+            self.x_des = x_des[:-1]
+            self.t_des = t_des[:-1]
+        else:
+            assert t_des.shape[0] == dx_des.shape[0]
+            self.x_des = x_des
+            self.t_des = t_des
+            self.dx_des = dx_des
+        
+        self._created_from_traj_param = False
 
     def __getitem__(self, key):
         """ 
@@ -65,9 +77,24 @@ class ReferenceTrajectory:
         """
         self.t_des = self.t_des - self.t_des[0] + t_start
 
+    def stamp_trajectory_parameter(self, traj_param):
+        """
+        Stamp the parameter k to the reference trajectory
+        """
+        self._created_from_traj_param = True
+        self._traj_param = traj_param
+    
+    def get_trajectory_parameter(self):
+        """
+        Get the stamped parameter to the reference trajectory
+        """
+        assert self._created_from_traj_param
+        return self._traj_param
+
 class SafetyFilter:
     """
     TODO: convert back-and-forth between parameter, referencetrajectory, action
+    TODO: this safety filter assumes all equally-spaced time steps
     """
     def __init__(self, zono_env,
                  zono_order=40,
@@ -75,7 +102,8 @@ class SafetyFilter:
                  n_head=1,
                  dtype=torch.float,
                  device=torch.device('cpu'),
-                 nlp_time_limit=0.5):
+                 nlp_time_limit=0.5,
+                 verbose=False):
         """
         Receding-horizon implementation of the safety filter
 
@@ -89,7 +117,7 @@ class SafetyFilter:
         self.env = zono_env
         self.PI = torch.tensor(torch.pi,dtype=self.dtype,device=self.device)
         self.n_timesteps = 100 # Number of timesteps for CORA reachability
-        self.eps = 1e-6
+        self.eps = 1e-5
         self.zono_order = zono_order
         self.max_combs = max_combs
         self.nlp_time_limit = nlp_time_limit
@@ -106,6 +134,8 @@ class SafetyFilter:
         self.n_head   = n_head
         # self.t_head   = t_head # head plan horizon
         self.dt_plan  = 1.0/zono_env.env.control_freq # time step for the plan
+
+        self.verbose = verbose
 
     def actions_to_reference_traj(self, actions):
         """
@@ -127,45 +157,41 @@ class SafetyFilter:
         n_actions = actions.shape[0]
 
         # Step 1. Parse actions related to the joint space
-        actions = actions[:, self.env.helper_controller.qpos_index]
+        ctrl = self.env.helper_controller
+        actions = actions[:, ctrl.qpos_index]
+        actions = np.clip(actions, ctrl.input_min, ctrl.input_max)
+        actions = scale_array_from_A_to_B(actions, A=[ctrl.input_min, ctrl.input_max], B=[ctrl.output_min, ctrl.output_max]) # (T, D) array
 
-        # Step 2. Compute dx_des from actions
-        # TODO: Scaling factor 0.05 is hardcoded for now, remove this later
-        # scale actions to velocity
-        actions = actions*0.05
-        # actions = np.clip(actions, LLC.input_min, LLC.input_max)
-        # actions = (actions - LLC.action_input_transform) * LLC.action_scale + LLC.action_output_transform
-
-        dx_des = actions/self.dt_plan
-        dx_des = torch.asarray(dx_des, dtype=self.dtype, device=self.device)
-
-        # x_des
+        # x_des: (T, D) array, last joint angle is dropped
         x_cur = self.env.qpos
-        x_des = x_cur + np.cumsum(actions[:-1], 0)
+        x_des = x_cur + np.cumsum(actions, 0)
         x_des = np.vstack([x_cur, x_des])
         x_des = torch.asarray(x_des, dtype=self.dtype, device=self.device)
 
         # t_des
-        t_des = torch.arange(0, n_actions*self.dt_plan, self.dt_plan, dtype=self.dtype, device=self.device)
+        t_des = torch.arange(0, (n_actions+1)*self.dt_plan, self.dt_plan, dtype=self.dtype, device=self.device)
 
-        reference_plan = ReferenceTrajectory(t_des, x_des, dx_des)
+        reference_traj = ReferenceTrajectory(t_des, x_des)
         
-        return reference_plan
+        return reference_traj
     
     def reference_traj_to_actions(self, traj):
         """
         Map the reference trajectory back to the actions for robosuite environment
         This does by computing the difference between the joint angles and scaling it back to the action space
+
+        Args
+            traj: ReferenceTrajectory object
         """
         assert isinstance(traj, ReferenceTrajectory)
 
         # TODO: change 0.05 part later
-        actions = traj.x_des[1:] - traj.x_des[:-1]
-        actions = actions/0.05
+        ctrl = self.env.helper_controller
+        actions = np.array(traj.x_des[1:] - traj.x_des[:-1])
+        actions = scale_array_from_A_to_B(actions, A=[ctrl.output_min, ctrl.output_max], B=[ctrl.input_min, ctrl.input_max]) # (T, D) array
+        actions = np.clip(actions, ctrl.input_min, ctrl.input_max)
+        assert(np.all(actions >= ctrl.input_min) and np.all(actions <= ctrl.input_max)), "Actions are out of range"
 
-        # LLC = self.env.helper_controller
-        # actions = (actions-LLC.action_output_transform)/LLC.action_scale + LLC.action_input_transform
-        # actions = np.clip(actions, LLC.input_min, LLC.input_max)
         actions = torch.asarray(actions, dtype=self.dtype, device=self.device)
 
         return actions
@@ -177,18 +203,59 @@ class SafetyFilter:
         Args
             actions: tensor shape of (N_horizon, action_dim), joint angle changes. last dim includes gripper actions.
         """
-        traj_des = self.actions_to_reference_traj(actions)
-        (is_safe, backup_plan) = self.monitor(traj_des)
+        # Translate actions to joint angle reference trajectory
+        plan_ref    = self.actions_to_reference_traj(actions)
+        plan_backup_new = self.monitor_and_compute_backup_plan(plan_ref)
 
-        if is_safe:
+        if plan_backup_new is not None:
+            assert np.allclose(plan_backup_new[0][1], plan_ref[self.n_head][1], atol=self.eps), "Backup plan is not starting from the end of the head plan"
+            self.clear_plan_backup()
+            self.set_plan_backup(plan_backup_new)
             actions_safe = actions[:self.n_head]
-            self.backup_actions = self.reference_traj_to_actions(backup_plan)
 
         else:
-            actions_safe = self.backup_actions[:self.n_head]
-            self.backup_actions = self.backup_actions[self.n_head:]
+            plan_backup_prev = self.pop_plan_backup(self.n_head)
+            actions_joint = self.reference_traj_to_actions(plan_backup_prev)
+            actions_gripper = self.get_gripper_actions(actions)[:self.n_head]
+            actions_safe = torch.vstack([actions_joint, actions_gripper])
+
+            self.disp(f"{len(self._plan_backup)} backup plans left")
 
         return actions_safe
+    
+    def get_gripper_actions(self, actions):
+        """
+        Extract the gripper actions from the actions
+        """
+        all_indices_set = set(range(actions.shape[1]))
+        joint_indices_set = set(self.env.helper_controller.qpos_index)
+        gripper_indices_set = all_indices_set - joint_indices_set
+
+        gripper_indices = sorted(list(gripper_indices_set))
+
+        return actions[:, gripper_indices]
+    
+    def clear_plan_backup(self):
+        """
+        Clear the backup plan
+        """
+        self._plan_backup = None
+    
+    def set_plan_backup(self, plan):
+        """
+        Set the backup plan
+        """
+        self._plan_backup = plan
+    
+    def pop_plan_backup(self, n):
+        """
+        Pop the backup plan of n length
+        """
+        plan = self._plan_backup[:n]
+        self._plan_backup = self._plan_backup[n:]
+
+        return plan
+
     
     def forward_occupancy_from_reference_traj(self, traj, only_end_effector=False):
         """
@@ -249,55 +316,55 @@ class SafetyFilter:
         
         Returns:
             bool: True if the head plan is safe, False otherwise
+
+        NOTE: In this base safety filter, it uses discrete-time forward occupancy to check the safety
         """
         is_colliding = self.env.collision_check(qs=plan.x_des)
         is_exceeding_joint_limit = self.env.joint_limit_check_with_explicit_plans(t_des=plan.t_des, 
                                                                                   x_des=plan.x_des, 
                                                                                   dx_des=plan.dx_des)
+        self.disp("Head plan is not safe", when=is_colliding)
+        self.disp("Head plan is exceeding joint limit", when=is_exceeding_joint_limit)
 
         return not is_colliding and not is_exceeding_joint_limit
     
-    def check_backup_plan_feasibility(self, plan):
-        """ Check if the safe backup plan is feasible
+    def compute_backup_plan(self, plan):
+        """ Compute the backup plan from the initial state of the tail plan.
+        This does by projecting the plan to the safe parameterized trajectory.
+        It returns backup plan in (ReferenceTrajectory) if exists. If not, it returns None.
         
         Args:
-            t: The time vector of the tail plan
-            x: The position vector of the tail plan
-            dx: The velocity vector of the tail plan
+            plan: (ReferenceTrajectory) The reference plan to compute the backup plan
         
         Returns:
-            bool: True if the tail plan is safe, False otherwise
+            backup_plan
         """
         # prepare constraints for NLP
-        x = plan.x_des
-        dx = plan.dx_des
-        t = plan.t_des
+        (t_0, x_0, dx_0) = plan[0]
 
-        self.prepare_constraints(x[0], dx[0], self.env.obs_zonos)
+        self.prepare_constraints(x_0, dx_0, self.env.obs_zonos)
 
         # trajectory optimization
-        ka_backup, flag = self.trajopt(t_des=t,
-                                        x_des=x,
-                                        dx_des=dx,
-                                        ka_0=torch.zeros(self.n_links),
-                                        qgoal=self.env.qgoal
-                                        )
+        # TODO: sometimes, for a same optimization problem, it returns flag = -5. Need to investigate
+        ka_backup, flag = self.trajopt(t_des=plan.t_des,
+                                    x_des=plan.x_des,
+                                    dx_des=plan.dx_des,
+                                    ka_0=torch.zeros(self.n_links),
+                                    qgoal=self.env.qgoal
+                                )
         
-        is_tail_plan_safe = flag == 0
+        is_backup_plan_feasible = (flag == 0)
 
-        backup_plan = self.rollout_param(q0=x[0], kv=dx[0], ka=ka_backup)
-        backup_plan = ReferenceTrajectory(*backup_plan)
-        
-        # TODO: bad coding
-        self.ka_backup = ka_backup
+        if is_backup_plan_feasible:
+            backup_plan = self.rollout_param_to_reference_trajectory(q0=x_0, kv=dx_0, ka=ka_backup)
+        else:
+            backup_plan = None
+            self.disp(f"Backup plan is not feasible with flag {flag}")
 
-        if not is_tail_plan_safe:
-            print("[INFO] Backup plan is not safe")
-
-        return (is_tail_plan_safe, backup_plan)
+        return backup_plan
     
-    def rollout_param(self, q0, kv, ka):
-        """ Rollout the trajectory parameterized by the parameter ka
+    def rollout_param_to_reference_trajectory(self, q0, kv, ka):
+        """ Rollout the trajectory parameterized by the parameter q0, kv, ka
         
         Args:
             q0: The initial planning state vector
@@ -308,16 +375,18 @@ class SafetyFilter:
                 of shape (n,) where n is the number of the joints
         
         Output:
-            t_des: The time vector of shape (n_t,)
-            q_des: The desired position vector of shape (n_t, n_joint)
-            dq_des: The desired velocity vector of shape (n_t, n_joint)
+            The plan trajectory in the form of ReferenceTrajectory
+                t_des: The time vector of shape (n_t,)
+                x_des: The desired joint angle vector of shape (n_t, n_joint)
+                dx_des: The desired joint velocity vector of shape (n_t, n_joint)
+
+        TODO: Remove T_FULL, T_PLAN from the global variable
         """
+        q0 = q0.to(self.device, self.dtype)
+        kv = kv.to(self.device, self.dtype)
+        ka = ka.to(self.device, self.dtype)
 
-        q0 = q0.to(self.device)
-        kv = kv.to(self.device)
-        ka = ka.to(self.device)
-
-        t_des = torch.arange(0, T_FULL+self.eps, self.dt_plan, dtype=self.dtype, device=self.device)
+        t_des = torch.arange(0, T_FULL+self.dt_plan, self.dt_plan, dtype=self.dtype, device=self.device)
         idx_peak = int(T_PLAN/self.dt_plan)
 
         t_to_peak  = t_des[0:idx_peak+1]
@@ -339,9 +408,12 @@ class SafetyFilter:
         q_des = torch.vstack([q_to_peak, q_to_brake])
         dq_des = torch.vstack([dq_to_peak, dq_to_brake])
 
-        return (t_des, q_des, dq_des)
+        traj_des = ReferenceTrajectory(t_des, q_des, dq_des)
+        traj_des.stamp_trajectory_parameter(traj_param=ka)
 
-    def monitor(self, traj_des):
+        return traj_des
+
+    def monitor_and_compute_backup_plan(self, traj_des):
         """ Given a performance policy, check if performance policy has safe
         backup plan.
 
@@ -356,26 +428,19 @@ class SafetyFilter:
         """
         assert isinstance(traj_des, ReferenceTrajectory)
 
-        # TODO: Implement checking first criterion: head plan feasibility
-        # Naive checker for now: collision checking
-        head_mask = traj_des.t_des <= (self.dt_plan * self.n_head)
-        head_plan = traj_des[head_mask]
+        backup_plan = None
 
+        # Checking first criterion: head plan safety
+        head_plan = traj_des[:self.n_head]
         is_head_plan_safe = self.check_head_plan_safety(head_plan)
 
-        if not is_head_plan_safe:
-            print("[INFO] Head plan is not safe")
+        if is_head_plan_safe:
+            # Checking second criterion: backup plan feasibility
+            tail_plan = traj_des[self.n_head:]
+            tail_plan.set_start_time(0)
+            backup_plan = self.compute_backup_plan(tail_plan)
 
-        # TODO: Implement second criterion: tail backup plan feasibility
-        tail_mask = traj_des.t_des >= (self.dt_plan * self.n_head)
-        tail_plan = traj_des[tail_mask]
-        tail_plan.set_start_time(0)
-
-        (is_backup_plan_feasible, backup_plan) = self.check_backup_plan_feasibility(tail_plan)
-
-        is_safe = is_head_plan_safe and is_backup_plan_feasible
-
-        return (is_safe, backup_plan)
+        return backup_plan
         
     
     ###################################################
@@ -588,3 +653,11 @@ class SafetyFilter:
             zonos.append(FO_link_slc)
         
         return zonos
+    
+    def disp(self, msg, when=None):
+        """
+        Display the message when the condition is met and verbose is True
+        """
+        if self.verbose and (when is None or when):
+            msg_format = "[INFO]     " + msg
+            print(msg_format)

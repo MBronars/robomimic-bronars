@@ -375,13 +375,24 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # the loop to filter before #
         # diffusion process is done #
         #############################
-        self.action_sequence_ref = naction
 
         # process action using Ta
         start = To - 1
         end = start + Ta
         action = naction[:,start:end]
+        self._action_sequence_ref = naction[:,start:] # log the entire predicted action horizons
+
         return action
+    
+    def get_predicted_action_sequence(self):
+        """
+        Get the entire predicted action sequence for the current episode.
+        """
+        action_sequence = self._action_sequence_ref.detach().cpu().numpy()
+        if action_sequence.shape[0] == 1:
+            return action_sequence[0]
+        else:
+            return action_sequence
 
     def serialize(self):
         """
