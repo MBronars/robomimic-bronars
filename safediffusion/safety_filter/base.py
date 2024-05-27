@@ -49,7 +49,10 @@ class ReferenceTrajectory:
         Returns another ReferenceTrajectory object with the sliced data
         """
         if isinstance(key, slice):
-            return ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+            plan = ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+            if self._created_from_traj_param:
+                plan.stamp_trajectory_parameter(self._traj_param)
+            return plan
         
         elif isinstance(key, int):
             if key < 0:
@@ -62,8 +65,11 @@ class ReferenceTrajectory:
             # Handle boolean array masking
             if len(key) != len(self.t_des):
                 raise ValueError("Boolean mask must have the same length as the reference trajectory")
-
-            return ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+            
+            plan = ReferenceTrajectory(self.t_des[key], self.x_des[key], self.dx_des[key])
+            if self._created_from_traj_param:
+                plan.stamp_trajectory_parameter(self._traj_param)
+            return plan
 
         else:
             raise TypeError("Invalid argument type")
@@ -125,15 +131,13 @@ class SafetyFilter:
         self.cache_robot_info_from_zono_env(zono_env)
         self.JRS_tensor = preload_batch_JRS_trig(dtype=self.dtype, device=self.device)
 
-        # Initialize settings related to the trajectory optimization
-        self.generate_combinations_upto()
-
         # Safety layer configuration
         self.w_goal   = 0.0
         self.w_proj   = 1.0
         self.n_head   = n_head
-        # self.t_head   = t_head # head plan horizon
-        self.dt_plan  = 1.0/zono_env.env.control_freq # time step for the plan
+
+        # Initialize settings related to the trajectory optimization
+        self.generate_combinations_upto()
 
         self.verbose = verbose
 
@@ -182,6 +186,8 @@ class SafetyFilter:
 
         Args
             traj: ReferenceTrajectory object
+        Output
+            actions: numpy array shape of (N_horizon, action_dim), joint angle changes
         """
         assert isinstance(traj, ReferenceTrajectory)
 
@@ -191,8 +197,6 @@ class SafetyFilter:
         actions = scale_array_from_A_to_B(actions, A=[ctrl.output_min, ctrl.output_max], B=[ctrl.input_min, ctrl.input_max]) # (T, D) array
         actions = np.clip(actions, ctrl.input_min, ctrl.input_max)
         assert(np.all(actions >= ctrl.input_min) and np.all(actions <= ctrl.input_max)), "Actions are out of range"
-
-        actions = torch.asarray(actions, dtype=self.dtype, device=self.device)
 
         return actions
 
@@ -217,10 +221,12 @@ class SafetyFilter:
             plan_backup_prev = self.pop_plan_backup(self.n_head)
             actions_joint = self.reference_traj_to_actions(plan_backup_prev)
             actions_gripper = self.get_gripper_actions(actions)[:self.n_head]
-            actions_safe = torch.vstack([actions_joint, actions_gripper])
+            actions_safe = np.hstack([actions_joint, actions_gripper])
 
             self.disp(f"{len(self._plan_backup)} backup plans left")
 
+        # ctrl = self.env.helper_controller
+        # assert(np.all(actions >= ctrl.input_min) and np.all(actions <= ctrl.input_max))
         return actions_safe
     
     def get_gripper_actions(self, actions):
@@ -234,6 +240,20 @@ class SafetyFilter:
         gripper_indices = sorted(list(gripper_indices_set))
 
         return actions[:, gripper_indices]
+    
+    def initialize_backup_plan(self):
+        """
+        Initialize the backup plan
+        """
+        q0 = self.env.qpos
+        kv = torch.zeros_like(q0)
+        kv += torch.randn_like(kv)*0.1
+        ka = torch.zeros_like(q0)
+        plan = self.rollout_param_to_reference_trajectory(q0, kv, ka)
+
+        assert(self.check_head_plan_safety(plan)), "Initial plan is not safe"
+
+        self.set_plan_backup(plan)
     
     def clear_plan_backup(self):
         """
@@ -251,11 +271,16 @@ class SafetyFilter:
         """
         Pop the backup plan of n length
         """
-        plan = self._plan_backup[:n]
+        plan = self._plan_backup[:n+1]
         self._plan_backup = self._plan_backup[n:]
 
         return plan
-
+    
+    def get_plan_backup_trajparam(self):
+        """
+        Get the backup plan
+        """
+        return self._plan_backup.get_trajectory_parameter()
     
     def forward_occupancy_from_reference_traj(self, traj, only_end_effector=False):
         """
@@ -277,6 +302,7 @@ class SafetyFilter:
     
     def start_episode(self):
         self.env.sync()
+        self.initialize_backup_plan()
 
     def generate_combinations_upto(self):
         self.combs = [torch.combinations(torch.arange(i), 2) for i in range(self.max_combs+1)]
@@ -301,11 +327,17 @@ class SafetyFilter:
                        'R':R}
         
         self.joint_axes = zono_env.joint_axes.to(dtype=self.dtype, device=self.device)
-        self.vel_lim = zono_env.vel_lim.cpu()
         self.pos_lim = zono_env.pos_lim.cpu()
         self.actual_pos_lim = zono_env.pos_lim[zono_env.lim_flag].cpu()
         self.n_pos_lim = int(zono_env.lim_flag.sum().cpu())
         self.lim_flag = zono_env.lim_flag.cpu()
+        self.dt_plan  = 1.0/zono_env.env.control_freq
+
+        # set the velocity limit: should be minimum of the robosuite output max and the real robot velocity limit
+        vel_lim_robot = zono_env.vel_lim.cpu()
+        vel_lim_robosuite = torch.tensor(zono_env.helper_controller.output_max/self.dt_plan, dtype=self.dtype)
+        self.vel_lim = torch.min(vel_lim_robot, vel_lim_robosuite)
+
 
     def check_head_plan_safety(self, plan):
         """ Check if the plan is safe

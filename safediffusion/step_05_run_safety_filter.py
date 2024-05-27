@@ -114,7 +114,7 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
             # The performance policy should return a sequence of the joint positions
             # Shape of (T, D)
             t_perf     = time.time()
-            act_unsafe = policy(ob=obs)
+            act = policy(ob=obs)
             actions    = np.vstack([unnormalize(policy, ac) for ac in policy.policy.get_predicted_action_sequence()]) # (B, Tp-To, D)
             t_perf     = time.time() - t_perf
             
@@ -122,17 +122,15 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
                 t_safe = time.time()
                 # NOTE: START HERE
                 act    = safety_filter(actions)
+                act    = act.squeeze(0)
                 t_safe = time.time() - t_safe
-            
-            # TODO: Hack: now we are using the unsafe action just to roll out the environment
-            act = act_unsafe
 
             # Visualize the zonotope world
             if zono_video_writer is not None:
                 if debug_video_count % video_skip == 0:
-                    FRS_zonos = safety_filter.FO_zonos_sliced_at_param(safety_filter.ka_backup)
+                    FO_backup = safety_filter.forward_occupancy_from_reference_traj(safety_filter._plan_backup, only_end_effector=True)
                     FO_desired = safety_filter.forward_occupancy_from_reference_traj(safety_filter.actions_to_reference_traj(actions), only_end_effector=True)
-                    video_img = safety_filter.env.render(FRS_zonos=FRS_zonos, FO_desired_zonos=FO_desired)
+                    video_img = safety_filter.env.render(FO_desired_zonos=FO_desired, FO_backup_zonos=FO_backup)
                     zono_video_writer.append_data(video_img)
                 debug_video_count += 1
 
@@ -203,7 +201,7 @@ if __name__ == "__main__":
         
         # safety filter configuration
         zonotope_twin_env = ZonotopeMuJoCoEnv(env.env, render_online=True, ticks=True)
-        safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=1)
+        safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=1, verbose=True)
         zono_video_writer = imageio.get_writer(f"{result_dir}/SFzonotwin.mp4", fps=20)
 
         # run simulation
