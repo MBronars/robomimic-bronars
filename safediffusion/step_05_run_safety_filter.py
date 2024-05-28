@@ -31,7 +31,7 @@ def overwrite_controller_to_joint_position(ckpt_dict):
         "input_min": -1,
         "output_max": 0.05,
         "output_min": -0.05,
-        "kp": 50,
+        "kp": 200,
         "damping_ratio": 1,
         "impedance_mode": "fixed",
         "kp_limits": [0, 300],
@@ -122,13 +122,12 @@ def rollout_with_safety_filter(policy, safety_filter, env, horizon,
                 t_safe = time.time()
                 # NOTE: START HERE
                 act    = safety_filter(actions)
-                act    = act.squeeze(0)
                 t_safe = time.time() - t_safe
 
             # Visualize the zonotope world
             if zono_video_writer is not None:
                 if debug_video_count % video_skip == 0:
-                    FO_backup = safety_filter.forward_occupancy_from_reference_traj(safety_filter._plan_backup, only_end_effector=True)
+                    FO_backup = safety_filter.forward_occupancy_from_reference_traj(safety_filter._plan_backup)
                     FO_desired = safety_filter.forward_occupancy_from_reference_traj(safety_filter.actions_to_reference_traj(actions), only_end_effector=True)
                     video_img = safety_filter.env.render(FO_desired_zonos=FO_desired, FO_backup_zonos=FO_backup)
                     zono_video_writer.append_data(video_img)
@@ -179,7 +178,7 @@ if __name__ == "__main__":
     rand_seeds = [11, 63, 307, 363, 366, 408, 413]
     ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300_joint_actions.pth")
     rollout_horizon = 500
-    n_head = 1
+    n_head = 5
     ##########################################################
 
     device = TorchUtils.get_torch_device(try_to_use_cuda=True)
@@ -197,11 +196,12 @@ if __name__ == "__main__":
 
         # environment configuration
         env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
+        env.env.model_timestep = 1e-3
         mujoco_video_writer = imageio.get_writer(f"{result_dir}/SFmujoco.mp4", fps=20)
         
         # safety filter configuration
         zonotope_twin_env = ZonotopeMuJoCoEnv(env.env, render_online=True, ticks=True)
-        safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=1, verbose=True)
+        safety_filter = SafetyFilter(zono_env=zonotope_twin_env, n_head=n_head, verbose=True)
         zono_video_writer = imageio.get_writer(f"{result_dir}/SFzonotwin.mp4", fps=20)
 
         # run simulation
@@ -213,7 +213,7 @@ if __name__ == "__main__":
             render=False,
             video_writer=mujoco_video_writer,
             zono_video_writer = zono_video_writer,
-            video_skip=5,
+            video_skip=1,
             camera_names=["agentview"]
         )
 

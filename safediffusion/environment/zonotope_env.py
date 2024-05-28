@@ -455,7 +455,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
         FO_desired_linewidth = 0.05
 
         FO_backup_color = 'green'
-        FO_backup_alpha = 0.5
+        FO_backup_alpha = 0.05
         FO_backup_linewidth = 0.05
 
         # clear all the previous patches

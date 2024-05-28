@@ -8,7 +8,7 @@ import numpy as np
 import robosuite as suite
 from robosuite.controllers import load_controller_config
 from safediffusion.utils.rand_utils import set_random_seed
-from safediffusion.utils.reachability_utils import zonotope_from_robosuite_env
+# from safediffusion.utils.reachability_utils import zonotope_from_robosuite_env
 
 
 def tracking_error(env):
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     env.reset()
     env.viewer.set_camera(camera_id=0)
 
-    zono_env = zonotope_from_robosuite_env(env)
+    # zono_env = zonotope_from_robosuite_env(env)
 
     low, high = env.action_spec
 
@@ -69,6 +69,7 @@ if __name__ == "__main__":
         action = np.zeros((env.action_dim))
         action[test_idx] = np.cos(i / 50)
         obs, reward, done, _ = env.step(action)
+        # state_dict = env.get_state()
         if visualize: env.render()
 
         # log interesting properties

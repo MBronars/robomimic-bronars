@@ -25,7 +25,7 @@ def overwrite_controller_to_joint_position(ckpt_dict):
         "input_min": -1,
         "output_max": 0.05,
         "output_min": -0.05,
-        "kp": 50,
+        "kp": 150,
         "damping_ratio": 1,
         "impedance_mode": "fixed",
         "kp_limits": [0, 300],
@@ -97,7 +97,8 @@ if __name__ == "__main__":
     # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300.pth") # policy checkpoint
     # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth") # policy checkpoint
     ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300_joint_actions.pth") # policy checkpoint
-    rollout_horizon = 750
+    rollout_horizon = 200
+    model_timestep = 1e-3
     ###########################################
 
     for rand_seed in rand_seeds:
@@ -116,6 +117,7 @@ if __name__ == "__main__":
         # ckpt_dict["env_metadata"]["env_kwargs"]["render_camera"] = "robot0_eye_in_hand"
         ##############################################
         env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
+        env.env.model_timestep=model_timestep
 
         video_writer = imageio.get_writer(f"{result_dir}/DPmujoco.mp4", fps=20)
 

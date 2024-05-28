@@ -1,9 +1,11 @@
 import os
 import sys
+from collections import deque
 
 import torch
 import numpy as np
 import cyipopt
+
 
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
@@ -140,6 +142,7 @@ class SafetyFilter:
         self.generate_combinations_upto()
 
         self.verbose = verbose
+        self.actions_queue = deque()
 
     def actions_to_reference_traj(self, actions):
         """
@@ -188,12 +191,20 @@ class SafetyFilter:
             traj: ReferenceTrajectory object
         Output
             actions: numpy array shape of (N_horizon, action_dim), joint angle changes
+
+        NOTE: This script is for JointPositionController: joint position controller action is the joint angle change
+        To make the joint position controller follow the reference trajectory, we need to compute action that would
+        result in the joint angle reference trajectory.
+        NOTE: This assumes the environment is reset.
         """
         assert isinstance(traj, ReferenceTrajectory)
 
-        # TODO: change 0.05 part later
         ctrl = self.env.helper_controller
-        actions = np.array(traj.x_des[1:] - traj.x_des[:-1])
+        offset = np.array(traj.x_des[0] - self.env.qpos) # if initial planning state is not the same as the current state
+        actions = np.array(traj.x_des[1:] - traj.x_des[:-1]) + offset
+        if ((actions.max(0) > ctrl.output_max) | (actions.min(0) < ctrl.output_min)).any():
+            self.disp("Actions are out of range: joint goal position gets different with the plan", self.verbose)
+        actions = np.clip(actions, ctrl.output_min, ctrl.output_max)
         actions = scale_array_from_A_to_B(actions, A=[ctrl.output_min, ctrl.output_max], B=[ctrl.input_min, ctrl.input_max]) # (T, D) array
         actions = np.clip(actions, ctrl.input_min, ctrl.input_max)
         assert(np.all(actions >= ctrl.input_min) and np.all(actions <= ctrl.input_max)), "Actions are out of range"
@@ -207,27 +218,29 @@ class SafetyFilter:
         Args
             actions: tensor shape of (N_horizon, action_dim), joint angle changes. last dim includes gripper actions.
         """
-        # Translate actions to joint angle reference trajectory
-        plan_ref    = self.actions_to_reference_traj(actions)
-        plan_backup_new = self.monitor_and_compute_backup_plan(plan_ref)
+        # Translate actions to joint angle reference trajectory        
+        if len(self.actions_queue) == 0:
+            plan_ref    = self.actions_to_reference_traj(actions)
+            plan_backup_new = self.monitor_and_compute_backup_plan(plan_ref)
+            if plan_backup_new is not None:
+                assert np.linalg.norm(self.wrap_cont_joint_to_pi(plan_backup_new[0][1]- plan_ref[self.n_head][1]))<self.eps, "Backup plan is not starting from the end of the head plan"
+                self.clear_plan_backup()
+                self.set_plan_backup(plan_backup_new)
+                actions_safe = actions[:self.n_head]
 
-        if plan_backup_new is not None:
-            assert np.allclose(plan_backup_new[0][1], plan_ref[self.n_head][1], atol=self.eps), "Backup plan is not starting from the end of the head plan"
-            self.clear_plan_backup()
-            self.set_plan_backup(plan_backup_new)
-            actions_safe = actions[:self.n_head]
+            else:
+                plan_backup_prev = self.pop_plan_backup(self.n_head)
+                actions_joint = self.reference_traj_to_actions(plan_backup_prev)
+                actions_gripper = self.get_gripper_actions(actions)[:self.n_head]
+                actions_safe = np.hstack([actions_joint, actions_gripper])
 
-        else:
-            plan_backup_prev = self.pop_plan_backup(self.n_head)
-            actions_joint = self.reference_traj_to_actions(plan_backup_prev)
-            actions_gripper = self.get_gripper_actions(actions)[:self.n_head]
-            actions_safe = np.hstack([actions_joint, actions_gripper])
+                self.disp(f"{len(self._plan_backup)} backup plans left")
 
-            self.disp(f"{len(self._plan_backup)} backup plans left")
+            self.actions_queue.extend(actions_safe)
+        
+        action_safe = self.actions_queue.popleft()
 
-        # ctrl = self.env.helper_controller
-        # assert(np.all(actions >= ctrl.input_min) and np.all(actions <= ctrl.input_max))
-        return actions_safe
+        return action_safe
     
     def get_gripper_actions(self, actions):
         """
