@@ -240,10 +240,56 @@ class ZonotopeMuJoCoEnv(Arm_3D):
 
         return zonotopes
     
+    def get_gripper_zonotopes_from_xml(self):
+        """
+        TODO: Parse the zonotopes from xml file
+        """
+        import xml.etree.ElementTree as ET
+        from robosuite.utils.mjcf_utils import string_to_array
+
+        gripper = self.env.robots[0].gripper
+        xml_file = gripper.file
+        xml_string = open(xml_file).read()
+        xml_root = ET.fromstring(xml_string)
+        parent_map = {c: p for p in xml_root.iter() for c in p}
+
+        meshes = {}
+        for mesh in xml_root.iter("mesh"):
+            meshes[mesh.get("name")] = mesh.attrib
+
+        for geom_index, geom in enumerate(xml_root.iter("geom")):
+            geom_name = gripper.naming_prefix + geom.get("name")
+
+            if geom_name in gripper.contact_geoms:
+                geom_type = geom.get("type", "sphere")
+
+                if geom_type == "mesh":
+                    geom_scale = string_to_array(self.meshes[geom.get("mesh")].get("scale", "1 1 1"))
+                
+                geom_quat = string_to_array(geom.get("quat", "1 0 0 0"))
+                geom_quat = [geom_quat[0], geom_quat[1], geom_quat[2], geom_quat[3]]
+
+                geom_pos = string_to_array(geom.get("pos", "0 0 0"))
+
+                filename = meshes[geom.attrib["mesh"]]["file"]
+                filename = os.path.splitext(filename)[0] + ".obj"
+
+
+
+        # folder = gripper.folder
+        # gripper_mesh = mesh.Mesh.from_file(xml_file)
+
+        # self.env.sim.model.mesh_names # pickplace model 
+        # self.env.robots[0].gripper.naming_prefix
+        # for self.env.robots[0].gripper.contact_geoms
+        
+        #(1) get gripper contact geoms
+    
     def get_gripper_zonotopes(self):
         """
         Get the zonotopes of the robot gripper
         """
+        # self.get_gripper_zonotopes_from_xml()
         zonotopes = []
         for geom_id in self.gripper_geom_ids:
             if self.is_visual_geom(geom_id):
@@ -320,6 +366,7 @@ class ZonotopeMuJoCoEnv(Arm_3D):
             geom_info[geom_id]["geom_name"] = self.env.sim.model.geom_id2name(geom_id)
             geom_info[geom_id]["geom_type"] = self.env.sim.model.geom_type[geom_id]
             geom_info[geom_id]["body_name"] = self.get_body_name_from_geom_id(geom_id)
+            geom_info[geom_id]["is_visual"] = self.is_visual_geom(geom_id)
 
         return geom_info
     

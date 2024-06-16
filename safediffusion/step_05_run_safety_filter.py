@@ -31,7 +31,7 @@ def overwrite_controller_to_joint_position(ckpt_dict):
         "input_min": -1,
         "output_max": 0.05,
         "output_min": -0.05,
-        "kp": 200,
+        "kp": 2e3,
         "damping_ratio": 1,
         "impedance_mode": "fixed",
         "kp_limits": [0, 300],
