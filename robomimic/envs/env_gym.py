@@ -148,7 +148,11 @@ class EnvGym(EB.EnvBase):
         """
         Get goal observation. Not all environments support this.
         """
-        raise NotImplementedError
+        if hasattr(self.env.unwrapped, 'get_target'):
+            goal_dict = { "flat" : np.array(self.env.unwrapped.get_target())}
+            return goal_dict
+        else:
+            raise NotImplementedError
 
     def set_goal(self, **kwargs):
         """

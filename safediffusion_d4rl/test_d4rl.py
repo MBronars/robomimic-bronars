@@ -13,8 +13,6 @@ import robomimic
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 
-
-
 def view_raw_d4rl_dataset(env_name):
     base_folder = os.path.join(robomimic.__path__[0], "../datasets", "d4rl")
     dataset_path = os.path.join(base_folder, f"{env_name}.hdf5")
@@ -48,10 +46,6 @@ def playback_trajectory(env_name, demo_idx_list):
     f = h5py.File(dataset_path, "r")
     demos = list(f["data"].keys())
 
-    
-
-    
-
     env_meta = json.loads(f["data"].attrs["env_args"])
     print("==== Env Meta ====")
     print(json.dumps(env_meta, indent=4))
@@ -73,7 +67,7 @@ def playback_trajectory(env_name, demo_idx_list):
         demo_grp = f["data"][demos[demo_idx]]
         num_samples = demo_grp.attrs["num_samples"]
 
-        
+        assert(np.allclose(np.exp(-np.linalg.norm(demo_grp["obs"]["flat"][:, 0:2]-env.env.get_target(), 2, 1)),demo_grp["rewards"]))
 
         if any(demo_grp["rewards"][0:]):
             print("Successful Demo")
@@ -95,18 +89,22 @@ def playback_trajectory(env_name, demo_idx_list):
     video_writer.close()
 
 if __name__ == "__main__":
-    env2raw = {"maze2d_umaze_v1": "maze2d-umaze-sparse-v1",
+    """
+    TODO: Integrate this with the "Janner - Diffusers" codebase
+    """
+    env2raw = {
+               "maze2d_umaze_v1": "maze2d-umaze-sparse-v1",
                "maze2d_medium_dense_v1": "maze2d-medium-dense-v1",
                "maze2d_large_dense_v1": "maze2d-large-dense-v1"
             }
     
     # d4rl_env_name = "maze2d_umaze_v1"
-    # d4rl_env_name = "maze2d_medium_dense_v1"
-    d4rl_env_name = "maze2d_large_dense_v1"
+    d4rl_env_name = "maze2d_medium_dense_v1"
+    # d4rl_env_name = "maze2d_large_dense_v1"
 
     d4rl_env_raw = env2raw[d4rl_env_name]
     view_raw_d4rl_dataset(d4rl_env_raw)
 
-    num_demos = 10
+    num_demos = 100
     playback_trajectory(d4rl_env_name, np.linspace(0, num_demos-1, num_demos, dtype=int).tolist())
 

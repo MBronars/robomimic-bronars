@@ -276,9 +276,16 @@ class DiffusionPolicyUNet(PolicyAlgo):
         Returns:
             action (torch.Tensor): action tensor [1, Da]
         """
-        # obs_dict: key: [1,D]
+        # obs_dict: key: [1, To, Do]
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
+
+        # HACK: Seems like the observation is already padded from the reset function in the environment
+        for k in obs_dict.keys():
+            if len(obs_dict[k].shape) == 3 and obs_dict[k].shape[-2] == To:
+                obs_dict[k] = obs_dict[k][:, 0, :]
+
+        assert(min([len(obs_dict[k].shape) for k in obs_dict.keys()]) == 2)
 
         # TODO: obs_queue already handled by frame_stack
         # make sure we have at least To observations in obs_queue
@@ -298,7 +305,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             
             # run inference
             # [1,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor)
+            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict=goal_dict)
             
             # put actions into the queue
             # TODO: Change here to apply first Ta actions
@@ -331,13 +338,13 @@ class DiffusionPolicyUNet(PolicyAlgo):
             self.ema.copy_to(parameters=self._shadow_nets.parameters())
             nets = self._shadow_nets
         
-        # encode obs
+        # obs_dict[key].shape should be (B, To, D)
         inputs = {
             'obs': obs_dict,
             'goal': goal_dict
         }
         for k in self.obs_shapes:
-            # first two dimensions should be S[B, T] for inputs
+            # first two dimensions should be [B, T] for inputs
             assert inputs['obs'][k].ndim - 2 == len(self.obs_shapes[k])
         obs_features = TensorUtils.time_distributed(inputs, self.nets['policy']['obs_encoder'], inputs_as_kwargs=True)
         assert obs_features.ndim == 3  # [B, T, D]
