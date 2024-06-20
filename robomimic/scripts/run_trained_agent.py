@@ -256,21 +256,21 @@ def run_trained_agent(args):
     policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_dict=ckpt_dict, device=device, verbose=True)
 
     # HACK: hardcode while fixing joint position controller
-    ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
-        "type": "JOINT_POSITION",
-        "input_max": 1,
-        "input_min": -1,
-        "output_max": 0.05,
-        "output_min": -0.05,
-        "kp": 50,
-        "damping_ratio": 1,
-        "impedance_mode": "fixed",
-        "kp_limits": [0, 300],
-        "damping_ratio_limits": [0, 10],
-        "qpos_limits": None,
-        "interpolation": None,
-        "ramp_ratio": 0.2
-        }
+    # ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
+    #     "type": "JOINT_POSITION",
+    #     "input_max": 1,
+    #     "input_min": -1,
+    #     "output_max": 0.05,
+    #     "output_min": -0.05,
+    #     "kp": 50,
+    #     "damping_ratio": 1,
+    #     "impedance_mode": "fixed",
+    #     "kp_limits": [0, 300],
+    #     "damping_ratio_limits": [0, 10],
+    #     "qpos_limits": None,
+    #     "interpolation": None,
+    #     "ramp_ratio": 0.2
+    #     }
 
     # read rollout settings
     rollout_num_episodes = args.n_rollouts
