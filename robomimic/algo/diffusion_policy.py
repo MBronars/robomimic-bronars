@@ -50,6 +50,14 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # set up different observation groups for @MIMO_MLP
         observation_group_shapes = OrderedDict()
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
+
+        if len(self.goal_shapes) > 0:
+            self._is_goal_conditioned = True
+            observation_group_shapes["goal"] = OrderedDict(self.goal_shapes) 
+        else:
+            self._is_goal_conditioned = False
+
+
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
         
         obs_encoder = ObsNets.ObservationGroupEncoder(
@@ -135,6 +143,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         input_batch = dict()
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
+        if input_batch["goal_obs"] is not None:
+            # expand first dimension so we have shape (B, T, D) where T=1, currently (B, D)
+            input_batch["goal_obs"] = {k: input_batch["goal_obs"][k].unsqueeze(1) for k in input_batch["goal_obs"]}
+            # repeat goal_obs to match obs
+            input_batch["goal_obs"] = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in input_batch["goal_obs"].items()}
         input_batch["actions"] = batch["actions"][:, :Tp, :]
         
         # check if actions are normalized to [-1,1]
@@ -296,10 +309,15 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
             # remove final dim if it is 1
             obs_dict_tensor = dict((k, v.squeeze(-1)) for k,v in obs_dict_tensor.items())
+
+            if goal_dict is not None:
+                goal_dict = {k: goal_dict[k].unsqueeze(1) for k in goal_dict}
+                # repeat goal_obs to match obs
+                goal_dict = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in goal_dict.items()}
             
             # run inference
             # [1,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor)
+            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict = goal_dict)
             
             # put actions into the queue
             self.action_queue.extend(action_sequence[0])
