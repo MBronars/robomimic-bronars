@@ -7,13 +7,18 @@ import abc
 import torch
 import numpy as np
 import pandas as pd
-from gym.envs.mujoco import mujoco_env
+import gym
 import robomimic.envs.env_base as EB
+from robomimic.envs.wrappers import EnvWrapper
+
+from safediffusion.utils.env_utils import get_innermost_env
 
 
 class SafetyEnv(EB.EnvBase, abc.ABC):
     """
     Wrapper of the environment that employs set-representations for world model
+
+    Supports wrapping Envwrapper and EnvBase
     
     TODO: make it as an abstract class
     """
@@ -23,6 +28,12 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
                  **kwargs):
         
         self.env = env
+
+        # get mujoco sim object, supports Envwrapper and Env
+        if isinstance(env, EnvWrapper):
+            self.sim = env.env.env.sim
+        elif isinstance(env, EB.EnvBase):
+            self.sim = env.env.sim
 
         # safety-related geoms
         self.robot_geom_names            = self.register_robot_geoms()
@@ -36,7 +47,24 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         # hashing table
         self.geom_table                  = self.create_geom_table()
 
-    
+        # NOTE: gym.Env is not influenced by the global seeding, so we need to seed the environment manually
+        self.seed_env()
+
+    # ---------------------------------------------------------------------------- #
+    # ------------------------------- Seed-related ----------------------------- #
+
+    def seed_env(self):
+        """
+        Seed the environment
+
+        Args:
+            seed (int): seed to set
+        """
+        seed = np.random.randint(0, 2**32 - 1)
+        env_innermost = get_innermost_env(self.env)
+        if isinstance(env_innermost, gym.Env):
+            env_innermost._np_random, seed = gym.utils.seeding.np_random(seed)
+        
     # ---------------------------------------------------------------------------- #
     # ------------------------------- Safety-related ----------------------------- #
     # ---------------------------------------------------------------------------- #
@@ -83,16 +111,14 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         raise NotImplementedError
     
     def collision(self):
-        mjsim = self.env.env.sim
-
         obstacles = []
         obstacles.extend(self.static_obstacle_geom_names)
         obstacles.extend(self.dynamic_obstacle_geom_names)
 
-        for i in range(mjsim.data.ncon):
-            contact = mjsim.data.contact[i]
-            geom1 = mjsim.model.geom_id2name(contact.geom1)
-            geom2 = mjsim.model.geom_id2name(contact.geom2)
+        for i in range(self.sim.data.ncon):
+            contact = self.sim.data.contact[i]
+            geom1 = self.sim.model.geom_id2name(contact.geom1)
+            geom2 = self.sim.model.geom_id2name(contact.geom2)
 
             if (geom1 in self.robot_geom_names and geom2 in obstacles) or \
                (geom2 in self.robot_geom_names and geom1 in obstacles):
@@ -127,7 +153,10 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
     # ----------- This changes the internal state of the simulation -------------------- #
 
     def step(self, action):
-        return self.env.step(action)
+        obs, reward, done, info = self.env.step(action)
+        obs = self.get_observation(obs)
+
+        return obs, reward, done, info
 
     def reset(self):
         """
@@ -249,15 +278,15 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
 
         This assumes the MuJoCo environment.
         """
-        n_geoms = self.env.env.model.ngeom
+        n_geoms = self.sim.model.ngeom
         geom_info_dict = dict()
         
         for geom_id in range(n_geoms):
             geom_info_dict[geom_id] = dict()
-            geom_name = self.env.env.model.geom_id2name(geom_id)
+            geom_name = self.sim.model.geom_id2name(geom_id)
             geom_info_dict[geom_id]["name"]        = geom_name
-            geom_info_dict[geom_id]["type"]        = self.env.env.model.geom_type[geom_id]
-            geom_info_dict[geom_id]["body_id"]     = self.env.env.model.geom_bodyid[geom_id]
+            geom_info_dict[geom_id]["type"]        = self.sim.model.geom_type[geom_id]
+            geom_info_dict[geom_id]["body_id"]     = self.sim.model.geom_bodyid[geom_id]
             geom_info_dict[geom_id]["robot"]       = geom_name in self.robot_geom_names
             geom_info_dict[geom_id]["static_obs"]  = geom_name in self.static_obstacle_geom_names
             geom_info_dict[geom_id]["dynamic_obs"] = geom_name in self.dynamic_obstacle_geom_names
@@ -280,14 +309,13 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         if isinstance(body_names, str):
             body_names = [body_names]
         
-        mjsim = self.env.env.sim
         geom_names = []
 
         for body_name in body_names:
-            body_id = mjsim.model.body_name2id(body_name)
+            body_id = self.sim.model.body_name2id(body_name)
 
-            geom_names_iter = [mjsim.model.geom_id2name(gid) 
-                                for (gid, bid) in enumerate(mjsim.model.geom_bodyid) 
+            geom_names_iter = [self.sim.model.geom_id2name(gid) 
+                                for (gid, bid) in enumerate(self.sim.model.geom_bodyid) 
                                 if bid == body_id]
             
             geom_names.extend(geom_names_iter)
@@ -306,13 +334,12 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
 
         if isinstance(prefix_list, str):
             prefix_list = [prefix_list]
-
-        mjsim = self.env.env.sim        
+  
         geom_names = []
 
         for prefix in prefix_list:
             geom_names_iter = [name 
-                               for name in mjsim.model.geom_names 
+                               for name in self.sim.model.geom_names 
                                if name.startswith(prefix)]
             geom_names.extend(geom_names_iter)
         
@@ -330,14 +357,12 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
 
         if isinstance(postfix_list, str):
             postfix_list = [postfix_list]
-
-        mjsim = self.env.env.sim
-        ngeom = self.env.env.sim.ngeom
+        
         geom_names = []
 
         for postfix in postfix_list:
             geom_names_iter = [name 
-                               for name in mjsim.model.geom_names 
+                               for name in self.sim.model.geom_names 
                                if name.endswith(postfix)]
             geom_names.extend(geom_names_iter)
         

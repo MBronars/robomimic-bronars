@@ -48,7 +48,7 @@ def plot2img(fig, remove_margins=True):
     canvas = FigureCanvasAgg(fig)
     canvas.draw()
     img_as_string, (width, height) = canvas.print_to_buffer()
-    return np.fromstring(img_as_string, dtype='uint8').reshape((height, width, 4))
+    return np.frombuffer(img_as_string, dtype='uint8').reshape((height, width, 4))
 
 
 #-----------------------------------------------------------------------------#
@@ -73,7 +73,7 @@ class MazeRenderer:
     def renders(self, observations, plans=None, title=None):
         plt.clf()
         fig = plt.gcf()
-        fig.set_size_inches(5, 5)
+        fig.set_size_inches(5.12, 5.12)
         plt.imshow(self._background * .5,
             extent=self._extent, cmap=plt.cm.binary, vmin=0, vmax=1)
 

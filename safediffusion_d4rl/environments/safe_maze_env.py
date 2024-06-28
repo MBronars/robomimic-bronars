@@ -4,15 +4,17 @@ from safediffusion.envs.env_zonotope import ZonotopeEnv
 import torch
 import matplotlib.pyplot as plt
 
-
 class SafeMazeEnv(ZonotopeEnv):
+    """
+    Safety Wrapper for Maze2D environments.
+
+    The safety specifications are defined as not colliding with the walls.
+    """
     def __init__(self, env, **kwargs):
+        assert env.name.startswith('maze2d')
         super().__init__(env, **kwargs)
         self.janner_renderer = None
 
-    def name(self):
-        return "Maze" + super().name()
-    
     # ------------------- Helper Function ------------------------------ #
     def set_state(self, qpos, qvel):
         """ Set the state of the environment

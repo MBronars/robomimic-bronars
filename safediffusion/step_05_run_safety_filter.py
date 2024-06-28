@@ -20,9 +20,9 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
 
 from safediffusion.utils.rand_utils import set_random_seed
-from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
+from safediffusion.envs.env_safearm import ZonotopeMuJoCoEnv
 from safediffusion.safety_filter.base import SafetyFilter
-from safediffusion.utils.io_utils import RESULT_DIR
+from safediffusion.utils.file_utils import RESULT_DIR
 
 def overwrite_controller_to_joint_position(ckpt_dict):
     ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {

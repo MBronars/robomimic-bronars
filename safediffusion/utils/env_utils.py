@@ -37,3 +37,19 @@ def load_environment(name):
     env.max_episode_steps = wrapped_env._max_episode_steps
     env.name = name
     return env
+
+def get_innermost_env(env):
+    """
+    Returns the innermost environment of the multiple-wrapped environment.
+
+    Sometimes, there exists too many wrappers around the env and we want to directly access the innermost env
+
+    Args:
+        env (Env): The wrapped environment
+    
+    Return:
+        env (Env): The innermost environment
+    """
+    if hasattr(env, 'env'):
+        return get_innermost_env(env.env)
+    return env

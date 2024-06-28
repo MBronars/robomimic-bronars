@@ -11,12 +11,9 @@ import torch
 import robomimic
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
-import robomimic.utils.tensor_utils as TensorUtils
-import robomimic.utils.obs_utils as ObsUtils
-from robomimic.envs.env_base import EnvBase
 from robomimic.algo import RolloutPolicy
 from safediffusion.utils.rand_utils import set_random_seed
-from safediffusion.utils.io_utils import RESULT_DIR
+from safediffusion.utils.file_utils import RESULT_DIR
 
 from d4rl.pointmaze.maze_model import MEDIUM_MAZE_UNSAFE
 
@@ -28,9 +25,11 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
 
     policy.start_episode()
     obs = env.reset()
-    state_dict = env.get_state()
 
-    obs = env.reset_to(state_dict)
+    # env.reset_to_location
+    # state_dict = env.get_state()
+
+    # obs = env.reset_to(state_dict)
 
     goal = env.get_goal()
 
@@ -80,12 +79,14 @@ def rollout(policy, env, horizon, render=False, video_writer=None, video_skip=5,
 
 if __name__ == "__main__":
     ############# User Parameter ##############
-    rand_seeds = np.array(np.random.random(50)*100,dtype=int)
+    # rand_seeds = np.array(np.random.random(50)*100,dtype=int)
+    rand_seeds = [42]
     ckpt_path = os.path.join(robomimic.__path__[0], "../diffusion_policy_trained_models/maze2d/20240620205734/models/model_epoch_1200.pth") # policy checkpoint
     rollout_horizon = 400
     model_timestep = 1e-3
     ###########################################
 
+    # TODO: SEED does not work :(
     for rand_seed in rand_seeds:
         result_dir = os.path.join(os.path.dirname(__file__), f"eval/{rand_seed}")
         os.makedirs(result_dir, exist_ok=True)

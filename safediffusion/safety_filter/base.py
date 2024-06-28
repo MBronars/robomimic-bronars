@@ -18,7 +18,7 @@ from safediffusion.armtdpy.reachability.joint_reachable_set.load_jrs_trig import
 from safediffusion.armtdpy.reachability.joint_reachable_set.process_jrs_trig import process_batch_JRS_trig
 from safediffusion.armtdpy.planning.armtd_3d import wrap_to_pi
 
-from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
+from safediffusion.envs.env_safearm import ZonotopeMuJoCoEnv
 
 from safediffusion.utils.npy_utils import scale_array_from_A_to_B
 

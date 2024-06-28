@@ -8,7 +8,7 @@ import numpy as np
 import robosuite as suite
 from robosuite.controllers import load_controller_config
 from safediffusion.utils.rand_utils import set_random_seed
-from safediffusion.environment.zonotope_env import ZonotopeMuJoCoEnv
+from safediffusion.envs.env_safearm import ZonotopeMuJoCoEnv
 
 if __name__ == "__main__":
     ############ User Parameters #####################

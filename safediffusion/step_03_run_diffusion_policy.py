@@ -16,7 +16,7 @@ import robomimic.utils.obs_utils as ObsUtils
 from robomimic.envs.env_base import EnvBase
 from robomimic.algo import RolloutPolicy
 from safediffusion.utils.rand_utils import set_random_seed
-from safediffusion.utils.io_utils import RESULT_DIR
+from safediffusion.utils.file_utils import RESULT_DIR
 
 def overwrite_controller_to_joint_position(ckpt_dict):
     ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
