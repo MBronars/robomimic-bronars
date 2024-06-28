@@ -1,5 +1,5 @@
 """
-Implementation of Diffusion Policy https://diffusion-policy.cs.columbia.edu/ by Cheng Chi
+Implementation of Diffusers by Janners
 """
 from typing import Callable, Union
 import math
@@ -22,7 +22,7 @@ import robomimic.utils.obs_utils as ObsUtils
 
 from robomimic.algo import register_algo_factory_func, PolicyAlgo
 
-@register_algo_factory_func("diffusion_policy")
+@register_algo_factory_func("diffusers")
 def algo_config_to_class(algo_config):
     """
     Maps algo config to the BC algo class to instantiate, along with additional algo kwargs.
@@ -51,6 +51,12 @@ class DiffusionPolicyUNet(PolicyAlgo):
         observation_group_shapes = OrderedDict()
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
+
+        if len(self.goal_shapes) > 0:
+            self._is_goal_conditioned = True
+            observation_group_shapes["goal"] = OrderedDict(self.goal_shapes) 
+        else:
+            self._is_goal_conditioned = False
         
         obs_encoder = ObsNets.ObservationGroupEncoder(
             observation_group_shapes=observation_group_shapes,
@@ -63,11 +69,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         
         obs_dim = obs_encoder.output_shape()[0]
 
-        self.obs_dim = obs_dim
+        self.obs_dim = obs_dim//2
 
         # create network object
         noise_pred_net = ConditionalUnet1D(
-            input_dim=self.ac_dim + obs_dim,
+            input_dim=self.ac_dim + self.obs_dim,
             global_cond_dim=obs_dim*self.algo_config.horizon.observation_horizon
         )
 
@@ -138,6 +144,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
         input_batch["full_obs"] = {k: batch["obs"][k][:, :Tp, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
+        if input_batch["goal_obs"] is not None:
+            # expand first dimension so we have shape (B, T, D) where T=1, currently (B, D)
+            input_batch["goal_obs"] = {k: input_batch["goal_obs"][k].unsqueeze(1) for k in input_batch["goal_obs"]}
+            # repeat goal_obs to match obs
+            input_batch["goal_obs"] = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in input_batch["goal_obs"].items()}
         input_batch["actions"] = batch["actions"][:, :Tp, :]
         
         # check if actions are normalized to [-1,1]
@@ -180,7 +191,8 @@ class DiffusionPolicyUNet(PolicyAlgo):
             actions = batch['actions']
 
             predictions = {
-                'obs': batch["full_obs"]
+                'obs': batch["full_obs"],
+                'goal': batch["full_obs"]
             }
             
             # encode obs
@@ -200,7 +212,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
             obs_cond = obs_features.flatten(start_dim=1)
 
-            # append pred_features to action to get something like [B, T, Da+D]
+            # grab only first half of pred_feature final dim
+            true_feat_len = pred_features.shape[-1] // 2
+            pred_features = pred_features[:,:,:true_feat_len]
+
+            # append pred_features to action to get something like [B, T, Da+Do]
             # do not flatten pred_features
             actions = torch.cat([actions, pred_features], dim=-1)
 
@@ -291,9 +307,16 @@ class DiffusionPolicyUNet(PolicyAlgo):
         Returns:
             action (torch.Tensor): action tensor [1, Da]
         """
-        # obs_dict: key: [1,D]
+        # obs_dict: key: [1, To, Do]
         To = self.algo_config.horizon.observation_horizon
         Ta = self.algo_config.horizon.action_horizon
+
+        # HACK: Seems like the observation is already padded from the reset function in the environment
+        for k in obs_dict.keys():
+            if len(obs_dict[k].shape) == 3 and obs_dict[k].shape[-2] == To:
+                obs_dict[k] = obs_dict[k][:, 0, :]
+
+        assert(min([len(obs_dict[k].shape) for k in obs_dict.keys()]) == 2)
 
         # TODO: obs_queue already handled by frame_stack
         # make sure we have at least To observations in obs_queue
@@ -308,15 +331,19 @@ class DiffusionPolicyUNet(PolicyAlgo):
             # import pdb; pdb.set_trace()
             obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
             obs_dict_tensor = dict((k, torch.cat(v, dim=0).unsqueeze(0)) for k,v in obs_dict_list.items())
+            obs_dict_tensor = dict((k, v.squeeze(-1)) for k, v in obs_dict_tensor.items())
 
-            # remove final dim if it is 1
-            obs_dict_tensor = dict((k, v.squeeze(-1)) for k,v in obs_dict_tensor.items())
+            if goal_dict is not None:
+                goal_dict = {k: goal_dict[k].unsqueeze(1) for k in goal_dict}
+                # repeat goal_obs to match obs
+                goal_dict = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in goal_dict.items()}
             
             # run inference
             # [1,T,Da]
-            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor)
+            action_sequence = self._get_action_trajectory(obs_dict=obs_dict_tensor, goal_dict=goal_dict)
             
             # put actions into the queue
+            # TODO: Change here to apply first Ta actions
             self.action_queue.extend(action_sequence[0])
         
         # has action, execute from left to right
@@ -346,7 +373,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
             self.ema.copy_to(parameters=self._shadow_nets.parameters())
             nets = self._shadow_nets
         
-        # encode obs
+        # obs_dict[key].shape should be (B, To, D)
         inputs = {
             'obs': obs_dict,
             'goal': goal_dict
@@ -398,8 +425,20 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # process action using Ta
         start = To - 1
         end = start + Ta
-        action = naction[:,start:end, :action_dim]
+        action = naction[:,start:end]
+        self._action_sequence_ref = naction[:,start:] # log the entire predicted action horizons
+
         return action
+    
+    def get_predicted_action_sequence(self):
+        """
+        Get the entire predicted action sequence for the current episode.
+        """
+        action_sequence = self._action_sequence_ref.detach().cpu().numpy()
+        if action_sequence.shape[0] == 1:
+            return action_sequence[0]
+        else:
+            return action_sequence
 
     def serialize(self):
         """

@@ -8,6 +8,7 @@ class Simple2DPlanner(ParameterizedPlanner):
         """
         Tests out the ARMTD-style planner
         """
+        # TODO: Make this as an abstract function
         state_dict = {"x": 0, "y": 1}
         param_dict = {"k_vx": 0, "k_ax": 1, "k_vy": 2, "k_ay": 3}
         dt = 0.1
@@ -19,41 +20,56 @@ class Simple2DPlanner(ParameterizedPlanner):
         self.time_pieces = [1.0]
         assert min(self.time_pieces) > 0
         assert max(self.time_pieces) < t_f
+
+    def _prepare_problem_data(self, obs_dict, goal_dict):
+        """
+        TODO: Setup the useful variables for the trajectory optimization
+        """
+        pass
+
+    def compute_constraints(self, k):
+        """
+        Get C(k; problem_data)
+        """
+        pass
+
+    def compute_objective(self, k):
+        """
+        Get J(k; problem_data)
+        """
+        pass
     
-    def x_des(self, x0, param):
+    def model(self, t, x_0, param):
+        """
+        Get x(t; x0, k), given the initial state x0, trajectory parameter k.
+
+        Args:
+            t :    (N,),   time
+            x0:    (B, 2), initial state, (p_x, p_y)
+            param: (B, 4), param, (k_vx, k_ax, k_vy, k_ay)
+        
+        Returns:
+            x:  (B, N, 2), desired trajectory
+            dx: (B, N, 2), desired velocity
+        """
+        assert max(t) <= self.t_f
+
+        B = x_0.shape[0]
+        N = t.shape[0]
+
+        x  = np.zeros((B, N, self.n_state))
+        dx = np.zeros((B, N, self.n_state))
+
         # parse parameter
-        k_v = param[[self.param_dict["k_vx"], self.param_dict["k_vy"]]]
-        k_a = param[[self.param_dict["k_ax"], self.param_dict["k_ay"]]]
+        k_v = param[:, [self.param_dict["k_vx"], self.param_dict["k_vy"]]]
+        k_a = param[:, [self.param_dict["k_ax"], self.param_dict["k_ay"]]]
 
-        # piecewise C1 trajectory
         t1 = self.time_pieces[0]
-        t_des = np.arange(0, self.t_f+self.dt, self.dt)
 
-        # Piece 1
-        t_des_1 = t_des[t_des <= t1]
-        x_des_1 = traj_uniform_acc(t_des_1, x0, k_v, k_a)
+        x1, dx1 = traj_uniform_acc(t[t<=t1], x_0, k_v, k_a)
+        x2, dx2 = traj_uniform_acc(t[t>t1]-t1,  x1[:, -1, :], dx1[:, -1, :], -dx1[:, -1, :]/(self.t_f-t1))
 
-        # Piece 2
-        t_des_2 = t_des[t_des > t1] - t1
-        x_des_2 = traj_uniform_acc(t_des_2, x_des_1[:, -1], k_v+k_a*t1, -(k_v+k_a*t1)/(self.t_f-t1))
+        x[:, t<=t1, :], dx[:, t<=t1, :] = (x1, dx1)
+        x[:, t >t1, :], dx[:, t >t1, :] = (x2, dx2)
 
-        return np.hstack([x_des_1, x_des_2])
-    
-    def dx_des(self, x0, param):
-        # parse parameter
-        k_v = param[[self.param_dict["k_vx"], self.param_dict["k_vy"]]]
-        k_a = param[[self.param_dict["k_ax"], self.param_dict["k_ay"]]]
-
-        # piecewise C1 trajectory
-        t1 = self.time_pieces[0]
-        t_des = np.arange(0, self.t_f+self.dt, self.dt)
-
-        # Piece 1
-        t_des_1 = t_des[t_des <= t1]
-        dx_des_1 = np.expand_dims(k_v, axis=-1) + np.outer(k_a, t_des_1)
-
-        # Piece 2
-        t_des_2 = t_des[t_des > t1] - t1
-        dx_des_2 = np.expand_dims(dx_des_1[:, -1], axis=-1) + np.outer(dx_des_1[:, -1]/(self.t_f-t1), t_des_2)
-
-        return np.hstack([dx_des_1, dx_des_2])
+        return x, dx

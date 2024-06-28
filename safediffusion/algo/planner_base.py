@@ -1,19 +1,57 @@
 import os
+import abc
 
 import numpy as np
+import cyipopt
 import matplotlib.pyplot as plt
 
 from safediffusion.algo.plan import ReferenceTrajectory
 
+import torch
 
-class ParameterizedPlanner(object):
-    def __init__(self):
-        pass
+class TrajectoryOptimization(object):
+    """
+    Wrapper class of planner to render the optimization
+    """
+    def __init__(self, planner):
+        assert isinstance(planner, ParameterizedPlanner)
+        self.planner = planner
+    
+    def objective(self, x):
+        """
+        Objective function for the trajectory optimization
+        """
+        Obj, _ = self.planner.compute_objective(x)
+        return Obj
+    
+    def gradient(self, x):
+        """
+        Gradient of the objective function
+        """
+        _, Grad = self.planner.compute_objective(x)
+        return Grad
+    
+    def constraints(self, x):
+        """
+        Constraints for the trajectory optimization
+        """
+        Cons, _ = self.planner.compute_constraints(x)
+        return Cons    
+    
+    def jacobian (self, x):
+        """
+        Jacobian of the constraints
+        """
+        _, Jac = self.planner.compute_constraints(x)
+        return Jac
 
-    def model(self, x, k):
+    def intermediate(self, alg_mod, iter_count, obj_value, inf_pr, inf_du, mu, d_norm, regularization_size, alpha_du, alpha_pr, ls_trials):
+        """
+        Intermediate callback function
+        """
+        print(f"Iteration {iter_count}: {obj_value}, Primal Feas {inf_pr}, Dual Feas {inf_du}")
 
-
-class ParameterizedPlanner(object):
+class ParameterizedPlanner(abc.ABC):
     """
     The planner that plans the trajectory for the agent in the environment
     The plan should be time-parameterized.
@@ -35,9 +73,43 @@ class ParameterizedPlanner(object):
         self.t_f      = t_f                                      # time horizon (sec)
         self.t_des    = np.arange(0, self.t_f+self.dt, self.dt)  # planning time vector
 
+        # Trajectory Optimization
+
         # directory to save the plan
         if "render_kwargs" in kwargs.keys():
             self.render_kwargs = kwargs["render_kwargs"]
+
+    @abc.abstractmethod
+    def model(self, t, init_state, param):
+        """
+        Get x(t; x0, k), given the initial state x0, trajectory parameter k.
+        """
+        raise NotImplementedError
+    
+    @abc.abstractmethod
+    def compute_constraints(self, x):
+        """
+        Prepare the constraints for the trajectory optimization
+        
+        x: (n_optvar,), flattened trajectory
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def compute_objective(self, x):
+        """
+        Prepare the cost function for the trajectory optimization
+
+        x: (n_optvar,), flattened trajectory
+        """
+        raise NotImplementedError
+    
+    @abc.abstractmethod
+    def _prepare_problem_data(self, obs_dict, goal_dict):
+        """
+        Setup the useful variables for the trajectory optimization
+        """
+        raise NotImplementedError
 
     def __call__(self, obs_dict, goal_dict=None):
         """
@@ -46,23 +118,57 @@ class ParameterizedPlanner(object):
         Args:
             obs_dict (dict): current observation
             goal_dict (dict): (optional) goal
+
+        Returns:
+            plan (ReferenceTrajectory): the reference trajectory
         """
-        pass
+        # Solve the trajectory optimization
+        x0 = obs_dict["flat"]
+        k_opt, flag = self.trajopt(obs_dict, goal_dict)
 
+        # Wrap it to the reference trajectory
+        (x_des, dx_des) = self.model(self.t_des, x0, k_opt)
+        plan = ReferenceTrajectory(self.t_des, x_des, dx_des)
 
-    def model(self, init_state, param, return_derivative=False):
-        """
-        Get x(t; x0, k), given the initial state x0, trajectory parameter k.
-        """
-        assert(init_state.shape[-1] == self.n_state)
-        assert(param.shape[-1] == self.n_param)
-
-        if return_derivative:
-            return (self.t_des, self.x_des(init_state, param), self.dx_des(init_state, param))
-        else:
-            return (self.t_des, self.x_des(init_state, param))
-
+        return plan
     
+    def trajopt(self, obs_dict, goal_dict):
+        """
+        Based on the observation and goal, solve the trajectory optimization problem
+
+        1) prepare the problem data
+        2) construct the wrapper
+        3) solve the optimization
+            k* = max J(k) s.t. C(k) < 0
+        """
+        problem_data  = self._prepare_problem_data(obs_dict, goal_dict)
+        problem       = TrajectoryOptimization(self, problem_data)
+        n_optvar      = problem.n_optvar
+        n_constraints = problem.n_constraints
+
+        nlp = cyipopt.Problem(
+            n = n_optvar,
+            m = n_constraints,
+            problem_obj = problem,
+            lb = [-1] * n_optvar,
+            ub = [-1] * n_optvar,
+            cl = [-1e20] * n_constraints,
+            cu = [-1e-6] * n_constraints
+        )
+
+        nlp.add_option('sb', 'yes')
+        nlp.add_option('print_level', 0)
+        nlp.add_option('tol', 1e-3)
+        nlp.add_option('max_wall_time', self.nlp_time_limit)
+
+        k_opt, info = nlp.solve()
+        # nlp.solve(k_init)
+
+        k_opt = torch.tensor(k_opt, device=self.device, dtype=self.dtype)
+        flag  = info["status"]
+
+        return k_opt, flag
+
     def __repr__(self):
         print(f"Planner: {self.__class__.__name__}")
         for k, v in self.state_dict.items():

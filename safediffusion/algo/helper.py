@@ -5,6 +5,8 @@ Implementation of pieces of trajectory
 import numpy as np
 from scipy.interpolate import interp1d
 
+from safediffusion.algo.plan import ReferenceTrajectory
+
 def match_trajectories(T_des, *args):
     """
     Given desired sample times T_des and any number of time vectors (1D arrays)
@@ -59,9 +61,23 @@ def traj_uniform_acc(t, x0, v0, a):
     Implementation of trajectory with uniform acceleration
 
     Args:
-        t : (B, 1), time
-        x0: (B, n_state), initial state
-        v0: (B, n_state), initial velocity
-        a : (B, n_state), acceleration
+        t : (N_t,), time
+        x0: (B, D_x,), initial state
+        v0: (B, D_x,), initial velocity
+        a : (B, D_x,), acceleration
+    
+    Returns:
+        x_des: (B, N_t, D_x), desired trajectory
     """
-    return np.expand_dims(x0, axis=-1) + np.outer(v0, t) + np.outer(a, t**2) / 2
+    assert t.ndim == 1 and x0.ndim == 2 and v0.ndim == 2 and a.ndim == 2
+
+    B, D_x = x0.shape
+    N_t = t.shape[0]
+
+    t_expanded = np.expand_dims(t, axis=1)  # Shape: (N_t, 1)
+    t_squared = t_expanded ** 2
+
+    x_vec = np.expand_dims(x0, axis=1) + np.expand_dims(v0, axis=1) * t_expanded + np.expand_dims(a, axis=1) * t_squared / 2
+    dx_vec = np.expand_dims(v0, axis=1) + np.expand_dims(a, axis=1) * t_expanded
+
+    return x_vec, dx_vec

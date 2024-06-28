@@ -42,7 +42,7 @@
 
     },
     "train": {
-        "data": null,
+        "data": "/home/wjung85/Repo/projects/robomimic-safediffusion/datasets/d4rl/converted/maze2d_medium_dense_v1.hdf5",
         "output_dir":"../diffusion_policy_trained_models",
         "num_data_workers": 0,
         "hdf5_cache_mode": "low_dim",
