@@ -69,11 +69,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         
         obs_dim = obs_encoder.output_shape()[0]
 
-        self.obs_dim = obs_dim
+        self.obs_dim = obs_dim//2
 
         # create network object
         noise_pred_net = ConditionalUnet1D(
-            input_dim=self.ac_dim + obs_dim,
+            input_dim=self.ac_dim + self.obs_dim,
             global_cond_dim=obs_dim*self.algo_config.horizon.observation_horizon
         )
 
@@ -191,7 +191,8 @@ class DiffusionPolicyUNet(PolicyAlgo):
             actions = batch['actions']
 
             predictions = {
-                'obs': batch["full_obs"]
+                'obs': batch["full_obs"],
+                'goal': batch["full_obs"]
             }
             
             # encode obs
@@ -210,6 +211,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
             assert pred_features.ndim == 3  # [B, T, D]
 
             obs_cond = obs_features.flatten(start_dim=1)
+
+            # grab only first half of pred_feature final dim
+            true_feat_len = pred_features.shape[-1] // 2
+            pred_features = pred_features[:,:,:true_feat_len]
 
             # append pred_features to action to get something like [B, T, Da+Do]
             # do not flatten pred_features
