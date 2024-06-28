@@ -7,7 +7,7 @@ import os
 import argparse
 
 import robomimic
-import robomimic.scripts.train_debug as rmtrain
+import robomimic.scripts.train as rmtrain
 
 
 if __name__ == "__main__":
@@ -22,7 +22,9 @@ if __name__ == "__main__":
         debug: set this flag to run a quick training run for debugging purposes
     """
     config_path = os.path.join(robomimic.__path__[0], "exps/safediffusion/diffusion_policy_maze.json")
-    dataset_path = os.path.join(robomimic.__path__[0], "../datasets/d4rl/converted/maze2d_medium_dense_v1.hdf5")
+    # dataset_path = os.path.join(robomimic.__path__[0], "../datasets/d4rl/converted/maze2d_medium_dense_v1.hdf5")
+    dataset_path = os.path.join(robomimic.__path__[0], "../datasets/d4rl/converted/antmaze_large_diverse_v2.hdf5")
+    config_path = os.path.join(robomimic.__path__[0], "exps/safediffusion/diffusion_policy_antmaze.json")
 
     args = argparse.Namespace(config = config_path,
                               algo = None,

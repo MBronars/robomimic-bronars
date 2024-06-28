@@ -51,6 +51,12 @@ class DiffusionPolicyUNet(PolicyAlgo):
         observation_group_shapes = OrderedDict()
         observation_group_shapes["obs"] = OrderedDict(self.obs_shapes)
         encoder_kwargs = ObsUtils.obs_encoder_kwargs_from_config(self.obs_config.encoder)
+
+        if len(self.goal_shapes) > 0:
+            self._is_goal_conditioned = True
+            observation_group_shapes["goal"] = OrderedDict(self.goal_shapes) 
+        else:
+            self._is_goal_conditioned = False
         
         obs_encoder = ObsNets.ObservationGroupEncoder(
             observation_group_shapes=observation_group_shapes,
@@ -135,6 +141,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         input_batch = dict()
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
+        if input_batch["goal_obs"] is not None:
+            # expand first dimension so we have shape (B, T, D) where T=1, currently (B, D)
+            input_batch["goal_obs"] = {k: input_batch["goal_obs"][k].unsqueeze(1) for k in input_batch["goal_obs"]}
+            # repeat goal_obs to match obs
+            input_batch["goal_obs"] = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in input_batch["goal_obs"].items()}
         input_batch["actions"] = batch["actions"][:, :Tp, :]
         
         # check if actions are normalized to [-1,1]
@@ -300,8 +311,12 @@ class DiffusionPolicyUNet(PolicyAlgo):
             # import pdb; pdb.set_trace()
             obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
             obs_dict_tensor = dict((k, torch.cat(v, dim=0).unsqueeze(0)) for k,v in obs_dict_list.items())
-
             obs_dict_tensor = dict((k, v.squeeze(-1)) for k, v in obs_dict_tensor.items())
+
+            if goal_dict is not None:
+                goal_dict = {k: goal_dict[k].unsqueeze(1) for k in goal_dict}
+                # repeat goal_obs to match obs
+                goal_dict = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in goal_dict.items()}
             
             # run inference
             # [1,T,Da]
