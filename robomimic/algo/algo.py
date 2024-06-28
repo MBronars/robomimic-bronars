@@ -494,7 +494,6 @@ class HierarchicalAlgo(Algo):
         """
         raise NotImplementedError
 
-
 class RolloutPolicy(object):
     """
     Wraps @Algo object to make it easy to run policies in a rollout loop.

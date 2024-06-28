@@ -1,7 +1,7 @@
 import numpy as np
 
-from safediffusion_d4rl.planner.planner_base import ParameterizedPlanner
-from safediffusion_d4rl.planner.helper import traj_uniform_acc
+from safediffusion.algo.planner_base import ParameterizedPlanner
+from safediffusion.algo.helper import traj_uniform_acc
 
 class Simple2DPlanner(ParameterizedPlanner):
     def __init__(self, **kwargs):

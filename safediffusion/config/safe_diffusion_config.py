@@ -11,7 +11,12 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         self.lock_keys()
 
     def safety_config(self):
-        # Render configuration for the zonotope renderers
+        # safety-filter configuration
+        self.safety.filter.n_head = 1
+
+        # safety-policy configuration
+        
+        # render configuration
         self.safety.render.zonotope.width = 20
         self.safety.render.zonotope.height = 20
         self.safety.render.zonotope.ticks  = True

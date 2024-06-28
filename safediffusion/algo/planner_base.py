@@ -3,6 +3,16 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 
+from safediffusion.algo.plan import ReferenceTrajectory
+
+
+class ParameterizedPlanner(object):
+    def __init__(self):
+        pass
+
+    def model(self, x, k):
+
+
 class ParameterizedPlanner(object):
     """
     The planner that plans the trajectory for the agent in the environment
@@ -17,19 +27,32 @@ class ParameterizedPlanner(object):
                  dtype  = np.float64,
                  **kwargs):
 
-        self.state_dict = state_dict                          # state dictionary that maps the name to index
-        self.param_dict = param_dict                          # param dictionary that maps the name to index
+        self.state_dict = state_dict                             # state dictionary that maps the name to index
+        self.param_dict = param_dict                             # param dictionary that maps the name to index
         
+        # Timing
         self.dt       = dt                                       # planning time step (sec)
         self.t_f      = t_f                                      # time horizon (sec)
         self.t_des    = np.arange(0, self.t_f+self.dt, self.dt)  # planning time vector
 
         # directory to save the plan
-        self.render_kwargs = kwargs["render_kwargs"]
+        if "render_kwargs" in kwargs.keys():
+            self.render_kwargs = kwargs["render_kwargs"]
 
-    def __call__(self, init_state, param, return_derivative=False):
+    def __call__(self, obs_dict, goal_dict=None):
         """
-        Shoot out the time-parameterized plan for the given state and parameter
+        Get the reference trajectory
+
+        Args:
+            obs_dict (dict): current observation
+            goal_dict (dict): (optional) goal
+        """
+        pass
+
+
+    def model(self, init_state, param, return_derivative=False):
+        """
+        Get x(t; x0, k), given the initial state x0, trajectory parameter k.
         """
         assert(init_state.shape[-1] == self.n_state)
         assert(param.shape[-1] == self.n_param)
@@ -39,6 +62,7 @@ class ParameterizedPlanner(object):
         else:
             return (self.t_des, self.x_des(init_state, param))
 
+    
     def __repr__(self):
         print(f"Planner: {self.__class__.__name__}")
         for k, v in self.state_dict.items():
@@ -72,8 +96,6 @@ class ParameterizedPlanner(object):
                                      f"plan_s{init_state}_k{param}.png")
             plt.savefig(save_path, format='png')
             plt.close(fig)
-
-        
 
     @property
     def n_state(self):

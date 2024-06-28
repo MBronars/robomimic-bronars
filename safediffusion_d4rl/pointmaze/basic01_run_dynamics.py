@@ -13,9 +13,9 @@ import gym
 import matplotlib.pyplot as plt
 
 from safediffusion.utils.render_utils import Maze2dRenderer, plot_history_maze
-from safediffusion_d4rl.planner.planner_base import ParameterizedPlanner
-from safediffusion_d4rl.planner.helper import match_trajectories
-from safediffusion_d4rl.planner.planner_maze import Simple2DPlanner
+from safediffusion.algo.planner_base import ParameterizedPlanner
+from safediffusion.algo.helper import match_trajectories
+from safediffusion_d4rl.algo.planner_maze import Simple2DPlanner
 
 def collision_check(env):
     """

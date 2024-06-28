@@ -10,3 +10,7 @@ from robomimic.algo.hbc import HBC
 from robomimic.algo.iris import IRIS
 from robomimic.algo.td3_bc import TD3_BC
 from robomimic.algo.diffusion_policy import DiffusionPolicyUNet
+from robomimic.algo.diffusers import DiffusionPolicyUNet
+
+# NOTE: we view the safety filter as a special case of a policy algo, so we register it here
+from safediffusion.algo.safety_filter import SafetyFilter
