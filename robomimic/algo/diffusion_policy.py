@@ -63,9 +63,11 @@ class DiffusionPolicyUNet(PolicyAlgo):
         
         obs_dim = obs_encoder.output_shape()[0]
 
+        self.obs_dim = obs_dim
+
         # create network object
         noise_pred_net = ConditionalUnet1D(
-            input_dim=self.ac_dim,
+            input_dim=self.ac_dim + obs_dim,
             global_cond_dim=obs_dim*self.algo_config.horizon.observation_horizon
         )
 
@@ -134,6 +136,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
         input_batch = dict()
         input_batch["obs"] = {k: batch["obs"][k][:, :To, :] for k in batch["obs"]}
+        input_batch["full_obs"] = {k: batch["obs"][k][:, :Tp, :] for k in batch["obs"]}
         input_batch["goal_obs"] = batch.get("goal_obs", None) # goals may not be present
         input_batch["actions"] = batch["actions"][:, :Tp, :]
         
@@ -175,6 +178,10 @@ class DiffusionPolicyUNet(PolicyAlgo):
         with TorchUtils.maybe_no_grad(no_grad=validate):
             info = super(DiffusionPolicyUNet, self).train_on_batch(batch, epoch, validate=validate)
             actions = batch['actions']
+
+            predictions = {
+                'obs': batch["full_obs"]
+            }
             
             # encode obs
             inputs = {
@@ -184,11 +191,19 @@ class DiffusionPolicyUNet(PolicyAlgo):
             for k in self.obs_shapes:
                 # first two dimensions should be [B, T] for inputs
                 assert inputs['obs'][k].ndim - 2 == len(self.obs_shapes[k])
+                assert predictions['obs'][k].ndim - 2 == len(self.obs_shapes[k])
             
             obs_features = TensorUtils.time_distributed(inputs, self.nets['policy']['obs_encoder'], inputs_as_kwargs=True)
+            pred_features = TensorUtils.time_distributed(predictions, self.nets['policy']['obs_encoder'], inputs_as_kwargs=True)
             assert obs_features.ndim == 3  # [B, T, D]
+            assert pred_features.ndim == 3  # [B, T, D]
 
             obs_cond = obs_features.flatten(start_dim=1)
+
+            # append pred_features to action to get something like [B, T, Da+D]
+            # do not flatten pred_features
+            actions = torch.cat([actions, pred_features], dim=-1)
+
             
             # sample noise to add to actions
             noise = torch.randn(actions.shape, device=self.device)
@@ -348,7 +363,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
         # initialize action from Guassian noise
         noisy_action = torch.randn(
-            (B, Tp, action_dim), device=self.device)
+            (B, Tp, action_dim + self.obs_dim), device=self.device)
         naction = noisy_action
         
         # init scheduler
@@ -369,6 +384,9 @@ class DiffusionPolicyUNet(PolicyAlgo):
                 sample=naction
             ).prev_sample
 
+        start = To - 1
+        end = start + Ta
+        pred_obs = naction[:,start:,action_dim:]
 
         #############################
         # TODO:  Add Safety Filter  #
@@ -380,7 +398,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # process action using Ta
         start = To - 1
         end = start + Ta
-        action = naction[:,start:end]
+        action = naction[:,start:end, :action_dim]
         return action
 
     def serialize(self):
