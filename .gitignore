@@ -124,3 +124,6 @@ venv.bak/
 
 # private macros
 macros_private.py
+
+# videos
+planning_videos/*

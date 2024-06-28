@@ -84,6 +84,7 @@ class EnvRobosuite(EB.EnvBase):
 
         if self._is_v1:
             if kwargs["has_offscreen_renderer"]:
+                import os
                 cuda_visible_device = os.environ.get("CUDA_VISIBLE_DEVICES", "")
                 if cuda_visible_device.isnumeric():
                     # assume that user specified a specific GPU ID

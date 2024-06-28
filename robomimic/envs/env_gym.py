@@ -10,6 +10,7 @@ from copy import deepcopy
 import gym
 try:
     import d4rl
+    
 except:
     print("WARNING: could not load d4rl environments!")
 
@@ -148,7 +149,18 @@ class EnvGym(EB.EnvBase):
         """
         Get goal observation. Not all environments support this.
         """
-        raise NotImplementedError
+        env_gym = self.env.unwrapped
+        goal_dict = {}
+        if isinstance(env_gym, d4rl.pointmaze.maze_model.MazeEnv):
+            goal_dict["flat"] = np.concatenate((np.array(env_gym.get_target()), np.zeros(2,)))
+            return goal_dict
+        
+        elif isinstance(env_gym.wrapped_env, d4rl.locomotion.ant.AntMazeEnv):
+            goal_dict["flat"] = np.concatenate((np.array(env_gym.get_target()), np.zeros(2,)))
+            return goal_dict
+
+        else:
+            raise NotImplementedError
 
     def set_goal(self, **kwargs):
         """

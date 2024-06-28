@@ -51,6 +51,39 @@
         "dataset_keys": [
             "actions"
         ],
+        "action_keys": [
+            "actions"
+        ],
+        "action_config": {
+            "actions": {
+                "normalization": null
+            },
+            "action_dict/abs_pos": {
+                "normalization": "min_max"
+            },
+            "action_dict/abs_rot_axis_angle": {
+                "normalization": "min_max",
+                "format": "rot_axis_angle"
+            },
+            "action_dict/abs_rot_6d": {
+                "normalization": null,
+                "format": "rot_6d"
+            },
+            "action_dict/rel_pos": {
+                "normalization": null
+            },
+            "action_dict/rel_rot_axis_angle": {
+                "normalization": null,
+                "format": "rot_axis_angle"
+            },
+            "action_dict/rel_rot_6d": {
+                "normalization": null,
+                "format": "rot_6d"
+            },
+            "action_dict/gripper": {
+                "normalization": null
+            }
+        },
         "goal_mode": null,
         "cuda": true,
         "batch_size": 256,
