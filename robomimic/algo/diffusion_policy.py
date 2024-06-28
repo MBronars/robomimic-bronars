@@ -200,7 +200,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
 
             obs_cond = obs_features.flatten(start_dim=1)
 
-            # append pred_features to action to get something like [B, T, Da+D]
+            # append pred_features to action to get something like [B, T, Da+Do]
             # do not flatten pred_features
             actions = torch.cat([actions, pred_features], dim=-1)
 
