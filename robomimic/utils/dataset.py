@@ -132,6 +132,12 @@ class SequenceDataset(torch.utils.data.Dataset):
         if self.hdf5_normalize_obs:
             self.obs_normalization_stats = self.normalize_obs()
 
+            if action_config["action_dict/obs"]["normalization"] == "gaussian":
+                # set offset and scale to mean and std
+                for k in self.obs_normalization_stats:
+                    self.obs_normalization_stats[k]["offset"] = self.obs_normalization_stats[k]["mean"]
+                    self.obs_normalization_stats[k]["scale"] = self.obs_normalization_stats[k]["std"]
+
         # prepare for action normalization
         self.action_normalization_stats = None
 
@@ -338,6 +344,19 @@ class SequenceDataset(torch.utils.data.Dataset):
             # note we add a small tolerance of 1e-3 for std
             obs_normalization_stats[k]["mean"] = merged_stats[k]["mean"].astype(np.float32)
             obs_normalization_stats[k]["std"] = (np.sqrt(merged_stats[k]["sqdiff"] / merged_stats[k]["n"]) + 1e-3).astype(np.float32)
+            (merged_stats["flat"]["max"]-merged_stats["flat"]["min"])/2
+            
+            # unnormalizing: x_true = x*scale + offset
+            if self.action_config["action_dict/obs"]["normalization"] == "gaussian":        
+                obs_normalization_stats[k]["offset"] = obs_normalization_stats[k]["mean"]
+                obs_normalization_stats[k]["scale"]  = obs_normalization_stats[k]["std"]
+            elif self.action_config["action_dict/obs"]["normalization"] == "min_max":
+                scale = ((merged_stats[k]["max"] - merged_stats[k]["min"])/2).astype(np.float32)
+                obs_normalization_stats[k]["scale"]  = scale
+                obs_normalization_stats[k]["offset"] = (scale * 1 + merged_stats[k]["min"]).astype(np.float32)
+            else:
+                raise ValueError("Unknown normalization type: {}".format(self.action_config["action_dict/obs"]["normalization"]))
+            
         return obs_normalization_stats
 
     def get_obs_normalization_stats(self):

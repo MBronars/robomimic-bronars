@@ -6,6 +6,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from PIL import Image, ImageDraw
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -42,23 +43,44 @@ class ZonotopeEnv(SafetyEnv):
             "robot": None,
             "goal": None,
             "dynamic_obs": None,
-            "static_obs": None
+            "static_obs": None,
+            "FRS": None
         }
 
-    def step(self, action):
-        obs = super().step(action)
-        self._sync()
-        return obs
+        self.plots = {
+            "plan": None,
+            "backup_plan": None
+        }
 
-    def reset(self):
-        obs = super().reset()
-        self._sync()
-        return obs
+    def get_observation(self, obs=None):
+        """
+        Add zonotope information to the observation dictionary
 
-    def reset_to(self, state):
-        obs = super().reset_to(state)
+        Args:
+            obs (dict): observation dictionary
+        
+        Returns:
+            obs_dict (dict): updated observation dictionary with zonotope information
+        
+        Example:
+            obs_dict["zonotope"]["obstacle"] = list of zonotopes of the obstacles
+            obs_dict["zonotope"]["robot"] = list of zonotopes of the robot
+        """
+        obs_dict = super().get_observation(obs)
+
+        # make sure to synchronize before getting observation
         self._sync()
-        return obs
+
+        zonotope_dict = dict()
+        zonotope_dict["obstacle"] = []
+        zonotope_dict["obstacle"].extend(list(self.geom_table["zonotope"][self.geom_table["static_obs"]]))
+        zonotope_dict["obstacle"].extend(list(self.geom_table["zonotope"][self.geom_table["dynamic_obs"]]))
+        zonotope_dict["robot"] = []
+        zonotope_dict["robot"].extend(list(self.geom_table["zonotope"][self.geom_table["robot"]]))
+
+        obs_dict["zonotope"] = zonotope_dict
+
+        return obs_dict
 
     def set_goal(self, **kwargs):
         obs = super().set_goal(**kwargs)
@@ -238,6 +260,25 @@ class ZonotopeEnv(SafetyEnv):
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
 
+    def draw_box(self, img, box_width, box_height, box_color):
+        # Convert the NumPy array to a PIL Image
+        pil_img = Image.fromarray(img)
+
+        # Create a drawing context
+        draw = ImageDraw.Draw(pil_img)
+
+        # Define the position for the box (bottom left corner)
+        image_width, image_height = pil_img.size
+        box_position = (0, image_height - box_height)
+
+        # Draw the rectangle (box)
+        draw.rectangle([box_position, (box_position[0] + box_width, box_position[1] + box_height)], fill=box_color)
+
+        # Convert the PIL Image back to a NumPy array
+        img_with_box = np.array(pil_img)
+        return img_with_box
+
+
 
     def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
         """Renders the environment as 3D zonotope world.
@@ -252,6 +293,22 @@ class ZonotopeEnv(SafetyEnv):
         self.draw_zonotopes_in_geom_table("dynamic_obs", remove_if_exists=True)
         self.draw_zonotopes_in_geom_table("robot", remove_if_exists=True)
 
+        # FRS
+        if "FRS" in kwargs.keys() and kwargs["FRS"] is not None:
+            if self.patches["FRS"] is not None:
+                self.clear_patches(self.patches["FRS"])
+            self.patches["FRS"], _ = self.draw_zonotopes(kwargs["FRS"], "green", 0.5, 0.1)
+
+        if "plan" in kwargs.keys():
+            if self.plots["plan"] is not None:
+                self.plots["plan"][0].remove()
+            self.plots["plan"] = self.ax.plot(kwargs["plan"][:, 0], kwargs["plan"][:, 1], color='r', linewidth=2)            
+
+        if "backup_plan" in kwargs.keys():
+            if self.plots["backup_plan"] is not None:
+                self.plots["backup_plan"][0].remove()
+            self.plots["backup_plan"] = self.ax.plot(kwargs["backup_plan"][:, 0], kwargs["backup_plan"][:, 1], color='b', linewidth=2)
+
         # goal zonotopes: TODO
         # self.goal_patches.remove()
 
@@ -260,5 +317,9 @@ class ZonotopeEnv(SafetyEnv):
 
         img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype=np.uint8)
         img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3,))
+
+        if "intervened" in kwargs.keys() and kwargs["intervened"] and self.is_safe():
+            img = self.img_intervene_filter(img)
+            # img = self.draw_box(img, box_width=100, box_height=100, box_color=(0, 255, 0))
 
         return img

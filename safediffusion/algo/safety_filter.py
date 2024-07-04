@@ -2,25 +2,45 @@
 Implementation of the safety filter algorithm.
 """
 import abc
+from copy import deepcopy
 from typing import Any
+from collections import deque
+
+import torch
+
 from robomimic.algo import RolloutPolicy
 from safediffusion.algo.plan import ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
-from collections import deque
+
 
 class SafetyFilter(RolloutPolicy, abc.ABC):
     """
     Wrapper of the policy (or rolloutpolicy) to make the policy safe
+
+    TODO: Think of how to load dtype and device wisely
     """
-    def __init__(self, rollout_policy, backup_policy, **config):
+    def __init__(self, rollout_policy, backup_policy, dt_action,
+                 dtype  = torch.float32,
+                 device = torch.device("cpu"),
+                **config):
+        
         assert isinstance(rollout_policy, RolloutPolicy)
         assert isinstance(backup_policy, ParameterizedPlanner)
 
         self.rollout_policy = rollout_policy
         self.backup_policy  = backup_policy
+        self.dt_action      = dt_action                     # action time step
+        self.dtype          = dtype
+        self.device         = device
+        
+        # performance policy-related
+        self.rollout_policy_obs_keys = self.rollout_policy.policy.global_config.all_obs_keys
+        
+        # backup policy-related
+        # TODO: fill-in the backup policy observation keys
         
         # Safety filter parameter
-        self.n_head         = config["filter"]["n_head"]    # length of the head plan
+        self.n_head         = config["filter"]["n_head"]    # length of the head actions (each unit corresponds to action applied to the environment)
 
         # Safety filter data structure
         self._backup_plan   = None                          # backup plan (reference trajectory)
@@ -33,9 +53,8 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         If the action queue is empty, we generate a new plan and check the safety.
         """
         if len(self._actions_queue) == 0:
-            actions     = self.rollout_policy(ob, goal)
-            plan        = self.preprocess_to_reference_traj(ob, actions)
-            info        = self.monitor_and_compute_backup_plan(plan, ob, goal)
+            (plan, actions) = self.get_plan_from_nominal_policy(ob, goal)
+            info            = self.monitor_and_compute_backup_plan(plan, ob, goal)
 
             # Definition of safety in this framework
             is_safe     = info["head_plan"] and info["backup_plan"] is not None
@@ -47,11 +66,23 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
 
             else:
                 backup_plan = self.pop_backup_plan(self.n_head)
-                action_safe = self.postprocess_to_actions(backup_plan)
+                action_safe = self.postprocess_to_actions(backup_plan, ob)
             
             self._actions_queue.extend(action_safe)
 
+            # Log useful variables for rendering purposes
+            self.nominal_plan = plan
+            self.intervened   = not is_safe
+
         return self._actions_queue.popleft()
+    
+    def check():
+        """
+        Check the compatibility of the performance policy, backup policy, observation, goal dictionary
+
+        TODO: PLEASE IMPLEMENT THIS FUNCTION
+        """
+        pass
     
     def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         """
@@ -68,19 +99,20 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         info = dict()
 
         # Checking 1st criteria
-        head_plan = plan[:self.n_head]
-        is_head_plan_safe = self.check_head_plan_safety(ob, head_plan)
+        head_plan = plan[:self.n_head+1]
+        is_head_plan_safe = self.check_head_plan_safety(head_plan, ob)
         info["head_plan"] = is_head_plan_safe
 
         # Checking 2nd criteria
         if is_head_plan_safe:
-            tail_plan   = plan[self.n_head:].set_start_time(0)
-            backup_plan = self.compute_backup_plan(tail_plan)
+            tail_plan = plan[self.n_head:]
+            tail_plan.set_start_time(0)
+            backup_plan = self.compute_backup_plan(tail_plan, ob, goal)
             info["backup_plan"] = backup_plan
 
         return info
     
-    def compute_backup_plan(self, ob, plan, goal):
+    def compute_backup_plan(self, plan, ob, goal):
         """ 
         Compute the backup plan from the initial state of the tail plan.
         This does by projecting the plan to the safe parameterized trajectory.
@@ -92,32 +124,71 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         Returns:
             backup_plan
         """
-        # TODO: wraps the (ob, plan, goal) into the (ob, goal) format for backup_policy
-        backup_plan = self.backup_policy(ob, goal=goal)
 
-        return backup_plan
+        ob_backup, goal_backup = self.process_dicts_for_backup_policy(plan, ob, goal)
+
+        backup_plan, info = self.backup_policy(obs_dict=ob_backup, goal_dict=goal_backup)
+
+        if info["status"] == 0:
+            return backup_plan
+        else:
+            return None
 
     # ------------------------------------------------------------------------------------ #
     # ------------------------- Abstract class to override ------------------------------  #
     # ------------------------------------------------------------------------------------ #
     @abc.abstractmethod
-    def preprocess_to_reference_traj(self, obs, actions):
+    def process_dicts_for_backup_policy(self, plan, ob, goal):
         """
-        Given the observation and action sequences, preprocess to reference trajectory.
-
-        Implementation of prediction function (o_{t}, a_{t..t+P}) -> (s_{t..t+T_p})
+        Given the plan, observation dictionary, and goal dictionary from the environment (Safety Wrapper)
+        preprocess the data to be compatible with the backup policy
 
         Args
-            obs     : (B, T_o, D_o) np.ndarray
-            actions : (B, T_p, D_a) np.ndarray
+            plan : ReferenceTrajectory object
+            ob   : observation dictionary
+            goal : goal dictionary
         
         Returns
-            reference_traj: (B, 1) ReferenceTrajectory array
+            obs_dict : observation dictionary
+            goal_dict: goal dictionary
+
+        NOTE: This function should be written based on 1) backup policy's input keys and 2) ReferenceTrajectory object
         """
         raise NotImplementedError
     
     @abc.abstractmethod
-    def postprocess_to_actions(self, reference_traj):
+    def get_plan_from_nominal_policy(self, ob, goal):
+        """
+        Get the plan from the nominal policy
+
+        Args
+            ob   : (B, 1) Observation array
+            goal : (B, 1) Goal array
+        
+        Returns
+            plan   : (B, 1) ReferenceTrajectory array
+            actions: (B, T_p, D_a) np.ndarray
+        """
+        raise NotImplementedError
+    
+    # @abc.abstractmethod
+    # def preprocess_to_reference_traj(self, obs, actions):
+    #     """
+    #     Given the observation and action sequences, preprocess to reference trajectory.
+
+    #     Implementation of prediction function (o_{t}, a_{t..t+P}) -> (s_{t..t+T_p})
+
+    #     Args
+    #         obs     : (B, T_o, D_o) np.ndarray
+    #         actions : (B, T_p, D_a) np.ndarray
+        
+    #     Returns
+    #         reference_traj: (B, 1) ReferenceTrajectory array
+    #     """
+    #     raise NotImplementedError
+    
+    @abc.abstractmethod
+    def postprocess_to_actions(self, reference_traj, ob):
         """
         Given the reference trajectory, postprocess to executable action that can be sent to the environment
 

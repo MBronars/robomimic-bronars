@@ -166,6 +166,16 @@ def get_zonotope_from_sphere_geom(pos, rot, size):
 
     return zonotope(Z)
 
+def get_zonotope_from_segment(x1, x2):
+    """
+    Create zonotope that represents the line segment between x1 and x2
+    """
+    c = (x1 + x2)/2
+    G = torch.abs((x2 - x1)/2)
+    Z = torch.vstack([c, G])
+
+    return zonotope(Z)
+
 if __name__ == "__main__":
     c = np.array([1, 1, 1])
     G = np.eye(3)

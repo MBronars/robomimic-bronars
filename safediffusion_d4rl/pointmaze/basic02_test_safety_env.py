@@ -22,9 +22,9 @@ def test_move(env, x0, action, render_mode=None):
     else:
         obs = env.reset()
         state = np.array(x0)
-        obs = env.set_state(qpos=state[:2], qvel=state[2:])
+        obs = env.set_state(pos=state[:2], vel=state[2:])
 
-    video_path = os.path.join(os.path.dirname(__file__), f"exps/render_test/")
+    video_path = os.path.join(os.path.dirname(__file__), f"exps/render_test2/")
     os.makedirs(video_path, exist_ok=True)
     video_path = os.path.join(video_path, f"rollout_{env.name}_{render_mode}.mp4")
     video_writer = imageio.get_writer(video_path, fps=20)
@@ -38,9 +38,9 @@ def test_move(env, x0, action, render_mode=None):
     video_writer.close()
 
 def test_safety_env(env_safety):    
-    test_move(env_safety, x0 = [1, 2, -1, -1], action = [-0.2, 1], render_mode = "janner")
-    test_move(env_safety, x0 = [1, 2, -1, -1], action = [-0.2, 1], render_mode = "zonotope")
-    test_move(env_safety, x0 = [1, 2, -1, -1], action = [-0.2, 1], render_mode = "rgb_array")
+    test_move(env_safety, x0 = [2, 2, -1, -1], action = [-0.2, 1], render_mode = "janner")
+    test_move(env_safety, x0 = [2, 2, -1, -1], action = [-0.2, 1], render_mode = "zonotope")
+    test_move(env_safety, x0 = [2, 2, -1, -1], action = [-0.2, 1], render_mode = "rgb_array")
 
 
 if __name__ == "__main__":
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     env_safety = SafeMazeEnv(env_robomimic, **config.safety)
 
     test_safety_env(env_safety)
-    test_move(env_robomimic, x0 = [1, 2, -1, -1], action = [-0.2, 1], render_mode = "rgb_array")
+    test_move(env_robomimic, x0 = [2, 2, -1, -1], action = [-0.2, 1], render_mode = "rgb_array")
     
 
 

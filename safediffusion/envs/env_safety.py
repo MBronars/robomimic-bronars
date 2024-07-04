@@ -48,6 +48,7 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         self.geom_table                  = self.create_geom_table()
 
         # NOTE: gym.Env is not influenced by the global seeding, so we need to seed the environment manually
+        self.unwrapped_env = get_innermost_env(self.env)
         self.seed_env()
 
     # ---------------------------------------------------------------------------- #
@@ -60,10 +61,10 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         Args:
             seed (int): seed to set
         """
+        assert hasattr(self, "unwrapped_env"), "The environment should have unwrapped_env attribute"
         seed = np.random.randint(0, 2**32 - 1)
-        env_innermost = get_innermost_env(self.env)
-        if isinstance(env_innermost, gym.Env):
-            env_innermost._np_random, seed = gym.utils.seeding.np_random(seed)
+        if isinstance(self.unwrapped_env, gym.Env):
+            self.unwrapped_env._np_random, seed = gym.utils.seeding.np_random(seed)
         
     # ---------------------------------------------------------------------------- #
     # ------------------------------- Safety-related ----------------------------- #
@@ -144,6 +145,26 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         filtered_img = filtered_img.astype(np.uint8)
 
         return filtered_img
+    
+    def img_intervene_filter(self, img):
+        """
+        Danger Filter for the image, makes the image red-ish.
+
+        Args:
+            img (np.ndarray): image to filter
+        
+        Returns:
+            filtered_img (np.ndarray): filtered image
+        """
+        blue_filter = np.zeros_like(img)
+        blue_filter[:, :, 2] = img[:, :, 2]
+
+        alpha = 0.5
+        filtered_img = (1-alpha)*img + alpha * blue_filter
+        filtered_img = filtered_img.astype(np.uint8)
+
+        return filtered_img
+
     
     # ---------------------------------------------------------------------------------- #
     # ------------------------------ Implement EnvBase Methods ------------------------- #

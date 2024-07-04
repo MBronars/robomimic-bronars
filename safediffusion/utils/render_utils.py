@@ -121,7 +121,7 @@ class Maze2dRenderer(MazeRenderer):
         
         self.observation_history = []
     
-    def render(self, observation, plan=None, title=None):
+    def render(self, observation, plan=None, title=None, **kwargs):
         """
         Single observation, append it to the histories, and render the rollouts
         """
@@ -132,9 +132,9 @@ class Maze2dRenderer(MazeRenderer):
     def renders(self, observations, plans=None, **kwargs):
         bounds = MAZE_BOUNDS[self.env_name]
 
-        observations = observations + .5
+        observations = observations - .5
         if plans is not None:
-            plans = plans + .5
+            plans = plans - .5
 
         if len(bounds) == 2:
             _, scale = bounds

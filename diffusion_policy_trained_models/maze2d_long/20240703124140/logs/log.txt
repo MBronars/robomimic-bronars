@@ -1,0 +1,394 @@
+
+============= Initialized Observation Utils with Obs Spec =============
+
+using obs modality: low_dim with keys: ['flat']
+using obs modality: rgb with keys: []
+using obs modality: depth with keys: []
+using obs modality: scan with keys: []
+
+============= Loaded Environment Metadata =============
+obs key flat with shape (4,)
+/home/wjung85/miniconda3/envs/robomimic_d4rl/lib/python3.8/site-packages/Cython/Distutils/old_build_ext.py:15: DeprecationWarning: dep_util is Deprecated. Use functions from setuptools instead.
+  from distutils.dep_util import newer, newer_group
+Warning: Flow failed to import. Set the environment variable D4RL_SUPPRESS_IMPORT_ERROR=1 to suppress this message.
+No module named 'flow'
+/home/wjung85/miniconda3/envs/robomimic_d4rl/lib/python3.8/site-packages/glfw/__init__.py:914: GLFWError: (65544) b'X11: The DISPLAY environment variable is missing'
+  warnings.warn(message, GLFWError)
+Warning: CARLA failed to import. Set the environment variable D4RL_SUPPRESS_IMPORT_ERROR=1 to suppress this message.
+No module named 'carla'
+/home/wjung85/miniconda3/envs/robomimic_d4rl/lib/python3.8/site-packages/pybullet_envs/env_bases.py:8: DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
+  from pkg_resources import parse_version
+/home/wjung85/miniconda3/envs/robomimic_d4rl/lib/python3.8/site-packages/pkg_resources/__init__.py:2846: DeprecationWarning: Deprecated call to `pkg_resources.declare_namespace('mpl_toolkits')`.
+Implementing implicit namespace packages (as specified in PEP 420) is preferred to `pkg_resources.declare_namespace`. See https://setuptools.pypa.io/en/latest/references/keywords.html#keyword-namespace-packages
+  declare_namespace(pkg)
+Created environment with name maze2d-medium-dense-v1
+Action size is 2
+[33mROBOMIMIC WARNING(
+    No environment version found in dataset!
+    Cannot verify if dataset and installed environment versions match
+)[0m
+FrameStackWrapper(
+    num_frames=2
+    env=maze2d-medium-dense-v1
+    {
+        "reset_target": true
+    }
+)
+
+number of parameters: 6.544641e+07
+
+============= Model Summary =============
+DiffusionPolicyUNet (
+  ModuleDict(
+    (policy): ModuleDict(
+      (obs_encoder): ObservationGroupEncoder(
+          group=obs
+          ObservationEncoder(
+              Key(
+                  name=flat
+                  shape=[4]
+                  modality=low_dim
+                  randomizer=None
+                  net=None
+                  sharing_from=None
+              )
+              output_shape=[4]
+          )
+          group=goal
+          ObservationEncoder(
+              Key(
+                  name=flat
+                  shape=[4]
+                  modality=low_dim
+                  randomizer=None
+                  net=None
+                  sharing_from=None
+              )
+              output_shape=[4]
+          )
+      )
+      (noise_pred_net): ConditionalUnet1D(
+        (mid_modules): ModuleList(
+          (0-1): 2 x ConditionalResidualBlock1D(
+            (blocks): ModuleList(
+              (0-1): 2 x Conv1dBlock(
+                (block): Sequential(
+                  (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                  (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                  (2): Mish()
+                )
+              )
+            )
+            (cond_encoder): Sequential(
+              (0): Mish()
+              (1): Linear(in_features=272, out_features=2048, bias=True)
+              (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+            )
+            (residual_conv): Identity()
+          )
+        )
+        (diffusion_step_encoder): Sequential(
+          (0): SinusoidalPosEmb()
+          (1): Linear(in_features=256, out_features=1024, bias=True)
+          (2): Mish()
+          (3): Linear(in_features=1024, out_features=256, bias=True)
+        )
+        (up_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(2048, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(2048, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(512, 512, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(1024, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(256, 256, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+        )
+        (down_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(6, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(6, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(256, 256, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(256, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(512, 512, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (2): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(512, 1024, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=272, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Identity()
+          )
+        )
+        (final_conv): Sequential(
+          (0): Conv1dBlock(
+            (block): Sequential(
+              (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+              (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+              (2): Mish()
+            )
+          )
+          (1): Conv1d(256, 6, kernel_size=(1,), stride=(1,))
+        )
+      )
+    )
+  )
+)
+
+SequenceDataset: normalizing observations...
+  0%|                                                | 0/11887 [00:00<?, ?it/s] 10%|###5                              | 1228/11887 [00:00<00:00, 12277.64it/s] 21%|#######1                          | 2505/11887 [00:00<00:00, 12561.84it/s] 32%|##########7                       | 3766/11887 [00:00<00:00, 12582.67it/s] 42%|##############3                   | 5025/11887 [00:00<00:00, 12386.03it/s] 53%|#################9                | 6283/11887 [00:00<00:00, 12454.64it/s] 63%|#####################5            | 7535/11887 [00:00<00:00, 12476.22it/s] 74%|#########################2        | 8815/11887 [00:00<00:00, 12579.57it/s] 85%|###########################9     | 10074/11887 [00:00<00:00, 12546.36it/s] 95%|###############################4 | 11337/11887 [00:00<00:00, 12567.42it/s]100%|#################################| 11887/11887 [00:00<00:00, 12524.89it/s]
+SequenceDataset: loading dataset into memory...
+  0%|                                                | 0/11888 [00:00<?, ?it/s]  5%|#9                                  | 642/11888 [00:00<00:01, 6414.27it/s] 11%|###8                               | 1294/11888 [00:00<00:01, 6471.34it/s] 16%|#####7                             | 1943/11888 [00:00<00:01, 6478.48it/s] 22%|#######6                           | 2591/11888 [00:00<00:01, 6458.00it/s] 27%|#########5                         | 3237/11888 [00:00<00:01, 6384.79it/s] 33%|###########4                       | 3876/11888 [00:00<00:01, 6362.52it/s] 38%|#############2                     | 4513/11888 [00:00<00:01, 6349.54it/s] 43%|###############1                   | 5151/11888 [00:00<00:01, 6357.18it/s] 49%|#################                  | 5796/11888 [00:00<00:00, 6385.57it/s] 54%|##################9                | 6442/11888 [00:01<00:00, 6408.15it/s] 60%|####################8              | 7083/11888 [00:01<00:00, 6266.39it/s] 65%|######################7            | 7712/11888 [00:01<00:00, 6273.09it/s] 70%|########################5          | 8348/11888 [00:01<00:00, 6298.94it/s] 76%|##########################4        | 8982/11888 [00:01<00:00, 6308.42it/s] 81%|############################3      | 9634/11888 [00:01<00:00, 6371.17it/s] 86%|#############################4    | 10281/11888 [00:01<00:00, 6399.89it/s] 92%|###############################2  | 10941/11888 [00:01<00:00, 6457.72it/s] 98%|#################################1| 11595/11888 [00:01<00:00, 6480.60it/s]100%|##################################| 11888/11888 [00:01<00:00, 6397.23it/s]
+
+============= Training Dataset =============
+SequenceDataset (
+	path=/home/wjung85/Repo/projects/robomimic-safediffusion/datasets/d4rl/converted/maze2d_medium_dense_v1.hdf5
+	obs_keys=('flat',)
+	seq_length=31
+	filter_key=none
+	frame_stack=2
+	pad_seq_length=True
+	pad_frame_stack=True
+	goal_mode=last
+	cache_mode=low_dim
+	num_demos=11888
+	num_sequences=1999733
+)
+
+SequenceDataset: normalizing actions...
+  0%|                                                | 0/11887 [00:00<?, ?it/s] 11%|###8                              | 1358/11887 [00:00<00:00, 13574.28it/s] 23%|#######9                          | 2773/11887 [00:00<00:00, 13905.60it/s] 35%|############                      | 4214/11887 [00:00<00:00, 14133.15it/s] 47%|################1                 | 5639/11887 [00:00<00:00, 14178.01it/s] 59%|####################2             | 7065/11887 [00:00<00:00, 14204.57it/s] 71%|########################2         | 8486/11887 [00:00<00:00, 14095.34it/s] 83%|############################3     | 9906/11887 [00:00<00:00, 14127.58it/s] 95%|###############################4 | 11338/11887 [00:00<00:00, 14187.21it/s]100%|#################################| 11887/11887 [00:00<00:00, 14137.87it/s]
+**************************************************
+Warnings generated by robomimic have been duplicated here (from above) for convenience. Please check them carefully.
+[33mROBOMIMIC WARNING(
+    No private macro file found!
+    It is recommended to use a private macro file
+    To setup, run: python /home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/scripts/setup_macros.py
+)[0m
+[33mROBOMIMIC WARNING(
+    No environment version found in dataset!
+    Cannot verify if dataset and installed environment versions match
+)[0m
+**************************************************
+
+  0%|                                                  | 0/100 [00:00<?, ?it/s]  0%|                                                  | 0/100 [00:00<?, ?it/s]
+run failed with error:
+normalize_dict() got an unexpected keyword argument 'obs_normalization_stats'
+
+Traceback (most recent call last):
+  File "train.py", line 513, in main
+    important_stats = train(config, device=device, auto_remove_exp=args.auto_remove_exp)
+  File "train.py", line 224, in train
+    step_log = TrainUtils.run_epoch(
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/utils/train_utils.py", line 686, in run_epoch
+    input_batch = model.postprocess_batch_for_training(input_batch, obs_normalization_stats=obs_normalization_stats)
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/algo/algo.py", line 279, in postprocess_batch_for_training
+    recurse_helper(batch)
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/algo/algo.py", line 274, in recurse_helper
+    d[k] = ObsUtils.normalize_dict(d[k], obs_normalization_stats=obs_normalization_stats)
+TypeError: normalize_dict() got an unexpected keyword argument 'obs_normalization_stats'
+

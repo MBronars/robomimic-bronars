@@ -372,6 +372,9 @@ class batchPolyZonotope:
     
 
     def center_slice_all_dep(self,val_slc):
+        """
+        c + (val_slc**expMat)@G
+        """
         n_ids = self.id.shape[0] # n_ids
         val_slc = val_slc[self.batch_idx_all + (slice(n_ids),)].unsqueeze(-2) # b1, b2,..., 1, n_ids
         expMat = self.expMat[:,torch.argsort(self.id)] # n_dep_gens, n_ids
@@ -431,7 +434,12 @@ class batchPolyZonotope:
 
 
     def deleteZerosGenerators(self,eps=0):
-        expMat, G = removeRedundantExponentsBatch(expMat,G,self.batch_idx_all)
+        """
+        This function is not implemented. Do not use this
+
+        TODO: the zero generators in G_rest is not deleted as of now
+        """
+        expMat, G = removeRedundantExponentsBatch(self.expMat,self.G,self.batch_idx_all)
         ind = torch.sum(expMat,1) == 0
         if torch.any(ind):
             c = self.c + torch.sum(G[ind],0)
@@ -440,12 +448,29 @@ class batchPolyZonotope:
         else:
             c = self.c
         
+        assert self.c.ndim == self.G.ndim - 1
+        
+        c = c.unsqueeze(dim=1)
+        
         id = self.id
         ind = torch.sum(expMat,0) == 0
         if torch.any(ind):
             expMat = expMat[:,~ind]
             id = id[:,~ind]
-        return polyZonotope(torch.vstack((c,G,self.Grest)),G.shape[0],expMat,id,compress=0)
+
+        # non_zero_idxs = torch.sum(torch.any(self.Grest!=0,-1),tuple(range(self.batch_dim))) != 0
+        # g_red = self.Grest[self.batch_idx_all+(non_zero_idxs,)]
+
+        # zero_idxs = torch.all(self.Grest==0,axis=-1)
+        # ind = zero_idxs.to(dtype=torch.float).sort(-1)[1].unsqueeze(-1).repeat((1,)*(self.batch_dim+1)+self.shape)
+        # max_non_zero_len = (~zero_idxs).sum(-1).max()
+        # g_red = self.Grest.gather(-2,ind)[self.batch_idx_all+(slice(None,max_non_zero_len),)]
+
+        Z = torch.cat((c, G, self.Grest), dim=-2)
+
+        assert G.shape[-2] == expMat.shape[0]
+        return batchPolyZonotope(Z, G.shape[-2], expMat, id, compress=0)
+ 
 
     def project(self,dim=[0,1]):
         Z = self.Z[self.batch_idx_all+(slice(None),dim)]

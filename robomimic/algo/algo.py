@@ -226,7 +226,7 @@ class Algo(object):
         # ensure obs_normalization_stats are torch Tensors on proper device
         obs_normalization_stats = TensorUtils.to_float(TensorUtils.to_device(TensorUtils.to_tensor(obs_normalization_stats), self.device))
 
-        obs_keys = ["obs", "next_obs", "goal_obs"]
+        obs_keys = ["obs", "next_obs", "goal_obs", ]
         for k in obs_keys:
             if k in batch and batch[k] is not None:
                 batch[k] = ObsUtils.process_obs_dict(batch[k])
@@ -259,7 +259,7 @@ class Algo(object):
 
         # we will search the nested batch dictionary for the following special batch dict keys
         # and apply the processing function to their values (which correspond to observations)
-        obs_keys = ["obs", "next_obs", "goal_obs"]
+        obs_keys = ["obs", "next_obs", "goal_obs", "full_obs"]
 
         def recurse_helper(d):
             """
@@ -271,7 +271,9 @@ class Algo(object):
                     if d[k] is not None:
                         d[k] = ObsUtils.process_obs_dict(d[k])
                         if obs_normalization_stats is not None:
-                            d[k] = ObsUtils.normalize_dict(d[k], obs_normalization_stats=obs_normalization_stats)
+                            # d[k] = ObsUtils.normalize_dict(d[k], obs_normalization_stats=obs_normalization_stats)
+                            # HACK
+                            d[k] = ObsUtils.normalize_dict(d[k], normalization_stats=obs_normalization_stats)
                 elif isinstance(d[k], dict):
                     # search down into dictionary
                     recurse_helper(d[k])
@@ -560,6 +562,7 @@ class RolloutPolicy(object):
         if self.action_normalization_stats is not None:
             action_keys = self.policy.global_config.train.action_keys
             action_shapes = {k: self.action_normalization_stats[k]["offset"].shape[1:] for k in self.action_normalization_stats}
+            # This removes non-action but prediction dimensions
             ac_dict = AcUtils.vector_to_action_dict(ac, action_shapes=action_shapes, action_keys=action_keys)
             ac_dict = ObsUtils.unnormalize_dict(ac_dict, normalization_stats=self.action_normalization_stats)
             action_config = self.policy.global_config.train.action_config

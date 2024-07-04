@@ -81,14 +81,15 @@ if __name__ == "__main__":
     ############# User Parameter ##############
     # rand_seeds = np.array(np.random.random(50)*100,dtype=int)
     rand_seeds = [42]
-    ckpt_path = os.path.join(robomimic.__path__[0], "../diffusion_policy_trained_models/maze2d/20240620205734/models/model_epoch_1200.pth") # policy checkpoint
+    # ckpt_path = os.path.join(robomimic.__path__[0], "../diffusion_policy_trained_models/maze2d/20240620205734/models/model_epoch_1200.pth") # policy checkpoint
+    ckpt_path = os.path.join(robomimic.__path__[0], "../diffusion_policy_trained_models/maze2d/20240701101051/models/model_epoch_150.pth")
     rollout_horizon = 400
     model_timestep = 1e-3
     ###########################################
 
     # TODO: SEED does not work :(
     for rand_seed in rand_seeds:
-        result_dir = os.path.join(os.path.dirname(__file__), f"eval/{rand_seed}")
+        result_dir = os.path.join(os.path.dirname(__file__), f"eval_new/{rand_seed}")
         os.makedirs(result_dir, exist_ok=True)
         # Set random seed
         set_random_seed(rand_seed)
@@ -98,7 +99,7 @@ if __name__ == "__main__":
         policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
 
         # restore environment
-        ckpt_dict["env_metadata"]["env_kwargs"]["maze_spec"] = MEDIUM_MAZE_UNSAFE
+        # ckpt_dict["env_metadata"]["env_kwargs"]["maze_spec"] = MEDIUM_MAZE_UNSAFE
         env, _ = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dict, render=True, render_offscreen=False, verbose=True)
         env    = env.unwrapped
 

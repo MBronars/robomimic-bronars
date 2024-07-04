@@ -3,6 +3,7 @@ Implementation of pieces of trajectory
 """
 
 import numpy as np
+import torch
 from scipy.interpolate import interp1d
 
 from safediffusion.algo.plan import ReferenceTrajectory
@@ -74,10 +75,11 @@ def traj_uniform_acc(t, x0, v0, a):
     B, D_x = x0.shape
     N_t = t.shape[0]
 
-    t_expanded = np.expand_dims(t, axis=1)  # Shape: (N_t, 1)
+    t = torch.tensor(t)
+    t_expanded = torch.unsqueeze(t, dim=1)
     t_squared = t_expanded ** 2
 
-    x_vec = np.expand_dims(x0, axis=1) + np.expand_dims(v0, axis=1) * t_expanded + np.expand_dims(a, axis=1) * t_squared / 2
-    dx_vec = np.expand_dims(v0, axis=1) + np.expand_dims(a, axis=1) * t_expanded
+    x_vec = torch.unsqueeze(x0, axis=1) + torch.unsqueeze(v0, axis=1) * t_expanded + torch.unsqueeze(a, axis=1) * t_squared / 2
+    dx_vec = torch.unsqueeze(v0, axis=1) + torch.unsqueeze(a, axis=1) * t_expanded
 
     return x_vec, dx_vec

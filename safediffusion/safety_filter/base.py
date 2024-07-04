@@ -506,6 +506,7 @@ class SafetyFilter:
                                            qvel.to(dtype=self.dtype,device=self.device),
                                            self.joint_axes)
         # TODO: This should be carefully done: coordinate transformation
+        # Bounding-box representation (n_generator = 3, n_dep_generator = 0)
         link_polyzonos = [pz.to(dtype=self.dtype, device=self.device) for pz in self.env._link_polyzonos_stl]
         self.FO_link,_, _ = forward_occupancy(R_trig, link_polyzonos, self.params, T_world_to_base=self.env.T_world_to_base) # NOTE: zono_order
 

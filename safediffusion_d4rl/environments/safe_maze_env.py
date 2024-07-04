@@ -6,22 +6,56 @@ import matplotlib.pyplot as plt
 
 class SafeMazeEnv(ZonotopeEnv):
     """
-    Safety Wrapper for Maze2D environments.
+    Safety Zonotope Wrapper for Maze2D environments.
 
     The safety specifications are defined as not colliding with the walls.
+
+    NOTE: get_observations() returns the robot qpos, while all the renderer functions are based on the world position.
     """
     def __init__(self, env, **kwargs):
         assert env.name.startswith('maze2d')
+
         super().__init__(env, **kwargs)
+        
+        # Set the third-party renderer
         self.janner_renderer = None
 
-    # ------------------- Helper Function ------------------------------ #
-    def set_state(self, qpos, qvel):
-        """ Set the state of the environment
+        # Transformation between the worlds
+        self.d4rlmazepos_to_worldpos = np.array([1, 1])
+        self.robotqpos_to_worldpos = self.get_robot_to_world_transformation()
+
+    # --------------------- Helper Function ------------------------------ #
+    def set_state(self, pos, vel):
+        """ 
+        Set the state of the MuJoCo simulation using position and velocity in world frame
+        
+        Args:
+            pos (np.ndarray): position of the agent in the world frame
+            vel (np.ndarray): velocity of the agent in the world frame
+        
+        NOTE: this pos and vel is different from the qpos and qvel
         """
         t_dummy = np.array([0])
+        qpos = pos - self.robotqpos_to_worldpos
+        qvel = vel
+
         state_dict = {"states": np.concatenate([t_dummy, qpos, qvel])}
+
         return self.reset_to(state_dict)
+    
+    def get_robot_to_world_transformation(self):
+        """
+        Get the transformation matrix that transforms the robot qpos to the world position (x, y)
+
+        In the Maze 2D environment, it is simple transformation
+        """
+        robot_zonotope = self.geom_table["zonotope"][self.geom_table["robot"]].values[0]
+        world_robotpos = np.array(robot_zonotope.center[:2])
+        body_robotpos  = self.sim.data.qpos
+
+        offset = world_robotpos - body_robotpos
+
+        return offset
 
     # ------------------- SafetyEnv related functions -------------------#
     def is_safe(self):
@@ -48,6 +82,42 @@ class SafeMazeEnv(ZonotopeEnv):
         """
         return []
     
+    def get_observation(self, obs=None):
+        obs = super().get_observation(obs)
+        return obs
+    
+    def get_goal(self):
+        """
+        Get the goal qpos, qvel configuration for the robot
+        """
+        # Get goal qpos
+        goal_pos     = self.unwrapped_env.get_target()          # goal d4rl pos
+        goal_pos     = goal_pos + self.d4rlmazepos_to_worldpos  # goal safemazeenv pos
+        goal_qpos    = goal_pos - self.robotqpos_to_worldpos    # goal robot qpos
+        
+        # Get goal qvel
+        goal_qvel     = np.zeros(2,)
+        goal_state   = np.concatenate((goal_qpos, goal_qvel))
+
+        goal_dict = {}
+        goal_dict["flat"] = goal_state
+        
+        return goal_dict
+    
+    def set_goal(self, pos):
+        """ 
+        Set the goal position of the agent
+
+        Args:
+            pos (np.ndarray): goal position in the world frame
+        """
+        
+        pos = pos - self.d4rlmazepos_to_worldpos # goal d4rl pos
+        self.unwrapped_env.set_target(target_location=pos)
+
+        return self.get_goal()
+
+
     # ------------------- Render Helper ------------------------------ #        
     def draw_zonotopes(self, zonotopes, color, alpha, linewidth):
         """

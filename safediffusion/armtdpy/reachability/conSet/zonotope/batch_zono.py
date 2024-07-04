@@ -84,7 +84,7 @@ class batchZonotope:
         return self.Z[self.batch_idx_all+(slice(1,None),)]
     @generators.setter
     def generators(self,value):
-        '''
+        '''(n_g, 2) zonotopes (world pos obstacle zonotope)
         Set value of generators
         '''
         self.Z[self.batch_idx_all+(slice(1,None),)] = value
@@ -139,9 +139,10 @@ class batchZonotope:
         return <batchZonotope>
         '''   
         if isinstance(other, torch.Tensor):
-            #assert other.shape == self.shape, f'array dimension does not match: should be {self.shape}, not {other.shape}.'
+            # assert other.shape == self.shape, f'array dimension does not match: should be {self.shape}, not {other.shape}.'
+            # shift the center of the zonotope
             Z = torch.clone(self.Z)
-            Z[self.batch_idx_all+(0,)] += other
+            Z[self.batch_idx_all+(0,)] += other # (B1, B2, .., Bb, dim)
         elif isinstance(other, zonotope): 
             assert self.dimension == other.dimension, f'zonotope dimension does not match: {self.dimension} and {other.dimension}.'
             Z = torch.cat(((self.center + other.center).unsqueeze(-2),self.generators,other.generators.repeat(self.batch_shape+(1,1,))),-2)
@@ -434,6 +435,7 @@ class batchZonotope:
         '''
         if dim is None:
             return batchPolyZonotope(self.Z,0)
+        # HACK: expecting commenting this would allow having multiple sliceable generators
         assert isinstance(dim,int) and dim <= self.dimension
         idx = self.generators[self.batch_idx_all+(slice(None),dim)] == 0
         assert ((~idx).sum(-1)==1).all(), 'sliceable generator should be one for the dimension.'
@@ -442,3 +444,30 @@ class batchZonotope:
                        self.generators[idx].reshape(self.batch_shape+(-1,self.dimension))),
                     -2)
         return batchPolyZonotope(Z,1,prop=prop)
+
+    def to_polyZonotope_multi_dim(self,dim=None,prop='None'):
+        '''
+        convert zonotope to polynomial zonotope
+        self: <zonotope>
+        dim: <int>, dimension to take as sliceable
+        return <polyZonotope>
+        '''
+        if dim is None or len(dim) < 1:
+        # if dim is None or len(dim) < 2:
+            return self.to_polyZonotope(dim, prop=prop)
+        # HACK: expecting commenting this would allow having multiple sliceable generators
+        assert all(isinstance(d, int) and d <= self.dimension for d in dim), "dim should be a list of integers within the zonotope's dimension."
+        idx = self.generators[self.batch_idx_all+(slice(None),dim)] == 0 #  
+        assert ((~idx).sum(-2)==1).all(), 'sliceable generator should be one for the dimension.'
+
+        new_generators = []
+        new_generators.append(self.center.unsqueeze(-2))
+        for d in range(len(dim)):
+            idx_d = idx[self.batch_idx_all + (slice(None), d)]
+            new_generators.append(self.generators[~idx_d].reshape(self.batch_shape+(-1,self.dimension)))
+            assert ((~idx_d).sum(-1)==1).all(), 'sliceable generator should be one for the dimension.'
+
+        new_generators.append(self.generators[idx.all(dim=-1)].reshape(self.batch_shape+(-1,self.dimension)))
+        Z = torch.cat(new_generators, dim=-2)
+
+        return batchPolyZonotope(Z, len(dim), prop=prop)

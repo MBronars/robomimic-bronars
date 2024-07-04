@@ -501,7 +501,9 @@ class polyZonotope:
 
 
     def deleteZerosGenerators(self,eps=0):
-        expMat, G = removeRedundantExponents(self.expMat,self.G,eps)
+        # expMat, G = removeRedundantExponents(self.expMat,self.G,eps)
+        # HACK
+        expMat, G = removeRedundantExponents(self.expMat,self.G)
         ind = torch.sum(expMat,1) == 0
         if torch.any(ind):
             c = self.c + torch.sum(G[ind],0)

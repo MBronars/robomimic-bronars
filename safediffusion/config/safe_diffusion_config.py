@@ -17,6 +17,7 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         # safety-policy configuration
         
         # render configuration
+        self.safety.render.save_dir = None
         self.safety.render.zonotope.width = 20
         self.safety.render.zonotope.height = 20
         self.safety.render.zonotope.ticks  = True
