@@ -1,7 +1,7 @@
 {
     "algo_name": "diffusion_policy",
     "experiment": {
-        "name": "maze2d",
+        "name": "maze2d_H128",
         "validate": false,
         "logging": {
             "terminal_output_to_txt": true,
@@ -111,8 +111,8 @@
         },
         "horizon": {
             "observation_horizon": 2,
-            "action_horizon": 16,
-            "prediction_horizon": 32
+            "action_horizon": 64,
+            "prediction_horizon": 128
         },
         "unet": {
             "enabled": true,

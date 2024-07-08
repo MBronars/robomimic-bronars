@@ -85,6 +85,7 @@ class ZonotopeEnv(SafetyEnv):
     def set_goal(self, **kwargs):
         obs = super().set_goal(**kwargs)
         self._sync()
+
         return obs
     
     @property
@@ -217,6 +218,26 @@ class ZonotopeEnv(SafetyEnv):
                                                 self.render_setting[key]["linewidth"])
         return patch_data
     
+    def add_circle(self, img, color):
+        """
+        Add a circle to the image
+
+        Args:
+            img (np.array): image to add the circle
+            center (tuple): center of the circle
+            radius (int): radius of the circle
+        
+        Returns:
+            img (np.array): updated image with the circle
+        """
+        radius = 16
+        center = [64, 64]
+
+        img = Image.fromarray(img)
+        draw = ImageDraw.Draw(img)
+        draw.ellipse([center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius], fill=color)
+        return np.array(img)
+    
     def draw_zonotopes(self, zonotopes, color, alpha, linewidth):
         """
         Draw the 3D zonotope on the plot
@@ -260,26 +281,6 @@ class ZonotopeEnv(SafetyEnv):
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
 
-    def draw_box(self, img, box_width, box_height, box_color):
-        # Convert the NumPy array to a PIL Image
-        pil_img = Image.fromarray(img)
-
-        # Create a drawing context
-        draw = ImageDraw.Draw(pil_img)
-
-        # Define the position for the box (bottom left corner)
-        image_width, image_height = pil_img.size
-        box_position = (0, image_height - box_height)
-
-        # Draw the rectangle (box)
-        draw.rectangle([box_position, (box_position[0] + box_width, box_position[1] + box_height)], fill=box_color)
-
-        # Convert the PIL Image back to a NumPy array
-        img_with_box = np.array(pil_img)
-        return img_with_box
-
-
-
     def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
         """Renders the environment as 3D zonotope world.
 
@@ -297,20 +298,37 @@ class ZonotopeEnv(SafetyEnv):
         if "FRS" in kwargs.keys() and kwargs["FRS"] is not None:
             if self.patches["FRS"] is not None:
                 self.clear_patches(self.patches["FRS"])
-            self.patches["FRS"], _ = self.draw_zonotopes(kwargs["FRS"], "green", 0.5, 0.1)
+            self.patches["FRS"], _ = self.draw_zonotopes(kwargs["FRS"], 
+                                                         self.render_setting["frs"]["color"], 
+                                                         self.render_setting["frs"]["alpha"], 
+                                                         self.render_setting["frs"]["linewidth"])
 
         if "plan" in kwargs.keys():
             if self.plots["plan"] is not None:
                 self.plots["plan"][0].remove()
-            self.plots["plan"] = self.ax.plot(kwargs["plan"][:, 0], kwargs["plan"][:, 1], color='r', linewidth=2)            
+            self.plots["plan"] = self.ax.plot(kwargs["plan"][:, 0], kwargs["plan"][:, 1], 
+                                              color     = self.render_setting["plan"]["color"], 
+                                              linewidth = self.render_setting["plan"]["linewidth"],
+                                              linestyle = self.render_setting["plan"]["linestyle"]
+                                            )            
 
         if "backup_plan" in kwargs.keys():
             if self.plots["backup_plan"] is not None:
                 self.plots["backup_plan"][0].remove()
-            self.plots["backup_plan"] = self.ax.plot(kwargs["backup_plan"][:, 0], kwargs["backup_plan"][:, 1], color='b', linewidth=2)
-
-        # goal zonotopes: TODO
-        # self.goal_patches.remove()
+            self.plots["backup_plan"] = self.ax.plot(kwargs["backup_plan"][:, 0], kwargs["backup_plan"][:, 1], 
+                                                     color     = self.render_setting["backup_plan"]["color"], 
+                                                     linewidth = self.render_setting["backup_plan"]["linewidth"],
+                                                     linestyle = self.render_setting["backup_plan"]["linestyle"]
+                                                    )
+        
+        if hasattr(self, "goal_zonotope"):
+            # goal zonotopes: TODO
+            if self.patches["goal"] is not None:
+                self.clear_patches(self.patches["goal"])
+            self.patches["goal"], _ = self.draw_zonotopes([self.goal_zonotope], 
+                                                         self.render_setting["goal"]["color"], 
+                                                         self.render_setting["goal"]["alpha"], 
+                                                         self.render_setting["goal"]["linewidth"])
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -318,8 +336,9 @@ class ZonotopeEnv(SafetyEnv):
         img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype=np.uint8)
         img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3,))
 
-        if "intervened" in kwargs.keys() and kwargs["intervened"] and self.is_safe():
-            img = self.img_intervene_filter(img)
-            # img = self.draw_box(img, box_width=100, box_height=100, box_color=(0, 255, 0))
+        if "intervened" in kwargs.keys() and kwargs["intervened"]:
+            img = self.add_circle(img, color = (0, 255, 0)) # if intervened, add green circle
+        else:
+            img = self.add_circle(img, color = (0, 0, 255)) # if not intervened, add blue circle
 
         return img

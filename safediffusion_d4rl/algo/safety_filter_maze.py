@@ -20,6 +20,17 @@ class SafeDiffusionPolicyMaze(SafeDiffusionPolicy):
         # TODO: Make this as a third-party object whose `predict(init_state, actions)` returns the state predictions
         self.predictor = predictor
         self.predictor.reset()
+
+    @property
+    def safety_critical_state_keys(self):
+        return ["flat"]
+    
+    def update_backup_policy_weight(self):
+        """
+        Update the weight of the backup policy
+        """
+        weight_dict = dict(goal = 0.0, projection = 1.0)
+        self.backup_policy.update_weight(weight_dict)
     
     def get_plan_from_nominal_policy(self, obs, goal):
         """
@@ -97,7 +108,7 @@ class SafeDiffusionPolicyMaze(SafeDiffusionPolicy):
         error = states[:, :2] - reference_traj.x_des.cpu().numpy()
         error = np.linalg.norm(error, axis=1)
 
-        print("Error: ", error)
+        # self.disp(f"Backup Plan Tracking Error: {error.max()}")
 
         return actions
     
@@ -130,28 +141,69 @@ class SafeDiffusionPolicyMaze(SafeDiffusionPolicy):
 
         return states
     
-    def process_dicts_for_backup_policy(self, plan, ob, goal):
+    def process_dicts_for_backup_policy(self, ob, goal, plan=None):
         """
         Given the plan, observation dictionary, and goal dictionary from the environment,
         preprocess the data to be compatible with the backup policy
 
         Args
-            plan : ReferenceTrajectory object
             ob   : observation dictionary
             goal : goal dictionary
+            plan : ReferenceTrajectory object (optional)
         
         Returns
             obs_dict : observation dictionary
             goal_dict: goal dictionary
+
+        # TODO: Since the safety filter is the wrapper of the backup policy, it would be good if we can parse the
+        #       available objective function keys from the backup policy
         """
-        obs_dict = deepcopy(ob)
+        assert plan is None or isinstance(plan, ReferenceTrajectory)
+
+        obs_dict  = deepcopy(ob)
         goal_dict = deepcopy(goal)
 
-        # HACK: This code requires knowledge of what ReferenceTrajectory looks like: (t_des, x_des, dx_des)
-        obs_dict["flat"] = torch.hstack([plan[0][1], plan[0][2]]) 
-        goal_dict["reference_trajectory"] = plan
+        initialize_mode = (plan is None)
+
+        if initialize_mode:
+            # When there is no nominal plan available, compute the backup plan starting at current state
+            for key in self.safety_critical_state_keys:
+                if obs_dict[key].ndim == 2:
+                    obs_dict[key] = ob[key][-1, :]
+
+        else:
+            # When nominal plan is available, compute the backup plan at the initial state of the nominal plan
+            # HACK: This code requires knowledge of what ReferenceTrajectory looks like: (t_des, x_des, dx_des)
+            
+            if ob["flat"].ndim == 2:
+                current_qposvel = ob["flat"][-1, :]
+            else:
+                current_qposvel = ob["flat"]
+            
+            backup_qposvel = torch.hstack([plan[0][1], plan[0][2]]) 
+
+            obs_dict["flat"] = backup_qposvel 
+
+            center_shift = torch.hstack([(backup_qposvel[:2] - current_qposvel[:2]), torch.tensor(0)])
+            obs_dict["zonotope"]["robot"][0] += center_shift
+
+            goal_dict["reference_trajectory"] = plan
 
         return obs_dict, goal_dict
+
+class IdentityDiffusionPolicyMaze(SafeDiffusionPolicyMaze):
+    def monitor_and_compute_backup_plan(self, plan, ob, goal):
+        info = dict()
+        info["head_plan"] = True
+        
+        # This would be never used. We just need placeholder
+        info["backup_plan"] = ReferenceTrajectory(t_des = self.backup_policy.t_des,
+                                                  x_des = torch.zeros(self.backup_policy.t_des.shape[0], 2))
+        
+        info["backup_plan"].stamp_trajectory_parameter(torch.zeros(4,))
+        
+
+        return info
         
 
         

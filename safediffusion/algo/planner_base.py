@@ -103,11 +103,18 @@ class ParameterizedPlanner(abc.ABC):
         self.dtype    = dtype
 
         # print optimization log
-        self.verbose = False
 
+        self.verbose = False
+        if "verbose" in kwargs.keys():
+            self.verbose = kwargs["verbose"]
+
+        self.render_kwargs = None
         # directory to save the plan
         if "render" in kwargs.keys():
             self.render_kwargs = kwargs["render"]
+
+        # weight for the trajectory optimization
+        self.weight_dict = {}
 
     @abc.abstractmethod
     def model(self, t, init_state, param):
@@ -171,13 +178,27 @@ class ParameterizedPlanner(abc.ABC):
         """
         raise NotImplementedError
     
+    def update_weight(self, weight_dict):
+        """
+        Update the weight of the objective function of the trajectory optimization
+
+        Args:
+            weight_dict: dictionary of key (objective name) and value (weight)
+        """
+        for k in weight_dict.keys():
+            assert k in self.weight_dict.keys()
+
+        for k, v in weight_dict.items():
+            self.weight_dict[k] = v
+            
+    
     def postprocess_plan(self, plan):
         """
         Postprocess the plan (Optional)
         """
         return plan
     
-    def __call__(self, obs_dict, goal_dict=None):
+    def __call__(self, obs_dict, goal_dict=None, random_initialization=False):
         """
         Get the reference trajectory
 
@@ -192,7 +213,7 @@ class ParameterizedPlanner(abc.ABC):
         obs_dict, goal_dict = self.process_observation_and_goal_for_TO(obs_dict, goal_dict)
         
         # Trajectory optimization
-        k_opt, info = self.trajopt(obs_dict, goal_dict)
+        k_opt, info = self.trajopt(obs_dict, goal_dict, random_initialization=random_initialization)
         
         # Wrap it to the reference trajectory
         plan = self.make_plan(obs_dict, k_opt)
@@ -216,7 +237,7 @@ class ParameterizedPlanner(abc.ABC):
         
         return plan
     
-    def trajopt(self, obs_dict, goal_dict):
+    def trajopt(self, obs_dict, goal_dict, random_initialization=False):
         """
         Based on the observation and goal, solve the trajectory optimization problem
 
@@ -231,11 +252,13 @@ class ParameterizedPlanner(abc.ABC):
                 0 -> Algorithm terminated successfully at a point satisfying the convergence tolerances
 
                 2 -> Algorithm converged to a point of local infeasibility. Problem may be infeasible
+            
+            random_initialization (bool): whether to initialize the trajectory parameter randomly
         
         Returns:
             k_opt (torch.tensor): optimized trajectory parameter
         """
-        problem_data  = self._prepare_problem_data(obs_dict, goal_dict)
+        problem_data  = self._prepare_problem_data(obs_dict, goal_dict, random_initialization=random_initialization)
         problem       = TrajectoryOptimization(self, problem_data, verbose=self.verbose)
         n_optvar      = problem.n_optvar
         n_constraint  = problem.n_constraint
@@ -261,8 +284,11 @@ class ParameterizedPlanner(abc.ABC):
         k_opt = torch.tensor(k_opt, device=self.device, dtype=self.dtype)
         k_opt = k_opt * self.FRS_info["delta_k"][self.opt_dim]
 
-        if info["status"] != 0:
+        self.disp(f"x0: {problem_data['meta']['state']}")
+        if info["status"] is not 0:
             self.disp(info["status_msg"])
+        else:
+            self.disp("Algorithm Feasible")
 
         return k_opt, info
 
@@ -284,7 +310,7 @@ class ParameterizedPlanner(abc.ABC):
     def compute_constraints(self, x, problem_data):
         """
         Prepare the constraints for the trajectory optimization
-
+q
         NOTE: we need to implement try and except block since cyipopt does not handle exceptions
         
         x: (n_optvar,), flattened trajectory
@@ -337,9 +363,7 @@ class ParameterizedPlanner(abc.ABC):
             plt.close(fig)
 
     def disp(self, msg):
-        print("========================================")
-        print(f"[{self.__class__.__name__}]: {msg}")
-        print("========================================")
+        print(f"[{self.__class__.__name__}]:        {msg}")
 
     @property
     def n_state(self):

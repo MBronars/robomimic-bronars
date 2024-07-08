@@ -14,6 +14,7 @@ from safediffusion.algo.plan import ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.algo.helper import traj_uniform_acc
 from safediffusion.utils.reachability_utils import get_zonotope_from_segment
+from safediffusion.algo.helper import match_trajectories
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -48,11 +49,13 @@ class Simple2DPlanner(ParameterizedPlanner):
         self.FRS_tensor, self.FRS_info = self.preload_frs(dtype = self.dtype, device=self.device)
         self.combs = self.generate_combinations_upto(200)
 
-        # For optimization
-        self.opt_dim = [2, 3]
-
         # useful var
         self.state_key = "flat"
+
+        # trajectory optimization
+        self.opt_dim     = [2, 3]
+        self.weight_dict = dict(goal = 0.0, projection = 0.0)
+        self.FRS = None
 
     # ------------------------------------------------------------------------------------------- #
     # --------------------- Define the Planning Model ------------------------------------------- #
@@ -78,7 +81,7 @@ class Simple2DPlanner(ParameterizedPlanner):
         
         return param
     
-    def model(self, t, p0, param):
+    def model(self, t, p0, param, return_gradient=False):
         """
         Get x(t; x0, k), given the initial state x0, trajectory parameter k.
 
@@ -111,17 +114,33 @@ class Simple2DPlanner(ParameterizedPlanner):
         t1 = self.time_pieces[0]
 
         x1, dx1 = traj_uniform_acc(t[t<=t1], p0, k_v, k_a)
-        x2, dx2 = traj_uniform_acc(t[t>t1]-t1,  x1[:, -1, :], dx1[:, -1, :], -dx1[:, -1, :]/(self.t_f-t1))
+
+        p1 = p0 + k_v*t1 + 0.5*k_a*t1**2
+        v1 = k_v + k_a*t1
+        a1 = -v1/(self.t_f-t1)
+        x2, dx2 = traj_uniform_acc(t[t>t1]-t1,  p1, v1, a1)
 
         x[:, t<=t1, :], dx[:, t<=t1, :] = (x1, dx1)
         x[:, t >t1, :], dx[:, t >t1, :] = (x2, dx2)
 
-        return x, dx
+        if return_gradient:
+            grad_to_optvar = torch.zeros((B, N, self.n_state, len(self.opt_dim)))
+            mask = (t <= t1)
+            grad_first_piece  = 0.5*(t[mask])**2
+            grad_second_piece = 0.5*t1**2 + t1*(t[~mask]-t1) + 0.5 * (-t1/(self.t_f-t1)) * (t[~mask]-t1)**2
+            grad_to_optvar[:, t<=t1, :, :] = grad_first_piece[:, None, None]*torch.eye(self.n_state)
+            grad_to_optvar[:, t >t1, :, :] = grad_second_piece[:, None, None]*torch.eye(self.n_state)
+
+            return x, dx, grad_to_optvar
+        
+        else:
+
+            return x, dx
     
     # ------------------------------------------------------------------------------------------- #
     # --------------------------------- Trajectory Optimization --------------------------------- #
     # ------------------------------------------------------------------------------------------- #
-    def _prepare_problem_data(self, obs_dict, goal_dict):
+    def _prepare_problem_data(self, obs_dict, goal_dict, random_initialization = False):
         """
         TODO: Setup the useful variables for the trajectory optimization
         """
@@ -135,12 +154,15 @@ class Simple2DPlanner(ParameterizedPlanner):
         problem_data["meta"] = {}
         problem_data["constraint"] = {}
         problem_data["objective"]  = {}
-
+        
         problem_data["meta"]["n_optvar"]      = len(self.opt_dim)
         problem_data["meta"]["n_constraint"]  = 0
-        problem_data["meta"]["optvar_0"]      = self.to_tensor(0*torch.ones(problem_data["meta"]["n_optvar"])) # initial point
         problem_data["meta"]["state"]         = self.to_tensor(obs_dict[self.state_key])
 
+        if random_initialization:
+            problem_data["meta"]["optvar_0"]  = self.to_tensor((torch.rand(len(self.opt_dim))-0.5)*2) # initial point
+        else:
+            problem_data["meta"]["optvar_0"]  = self.to_tensor(torch.zeros(len(self.opt_dim)))
 
         # prepare the data for constraints
         
@@ -185,15 +207,20 @@ class Simple2DPlanner(ParameterizedPlanner):
         problem_data["meta"]["n_constraint"] += 2 * len(v_dim)
 
 
+        # ---------------- Objectives are optional               ------------------------- #
         # -------------------------------------------------------------------------------- #
         # ------------------(J-1) Objective ---------------------------------------------- #
         #--------------------------------------------------------------------------------- #
-        # TODO: Implement the set-goal objective function
-        problem_data["objective"]["goal"] = {}
-        problem_data["objective"]["goal"]["target"] = self.to_tensor(goal_dict[self.state_key][0:2])
+        if "goal" in self.weight_dict.keys() and self.weight_dict["goal"] > 0:
+            problem_data["objective"]["goal"] = {}
+            problem_data["objective"]["goal"]["target"] = self.to_tensor(goal_dict[self.state_key][0:2])
 
-        # problem_data["objective"]["projection"] = {}
-        # problem_data["objective"]["projection"]["desired_plan"] = obs_dict["plan"]
+        # -------------------------------------------------------------------------------- #
+        # ------------------(J-2) Objective ---------------------------------------------- #
+        #--------------------------------------------------------------------------------- #
+        if "projection" in self.weight_dict.keys() and self.weight_dict["projection"]:
+            problem_data["objective"]["projection"] = {}
+            problem_data["objective"]["projection"]["reference_trajectory"] = goal_dict["reference_trajectory"]
 
         return problem_data
 
@@ -253,7 +280,7 @@ class Simple2DPlanner(ParameterizedPlanner):
         # x0 + v0*t <= v_ub, x0 + v0*t >= v_lb
         data = problem_data["constraint"]["velocity"]
 
-        v0    = torch.tensor(x0[2:], dtype=self.dtype, device=self.device)
+        v0    = self.to_tensor(x0[2:])
         v_max = data["v_max"]
         v_min = data["v_min"]
         t_pk  = self.time_pieces[0]
@@ -284,6 +311,9 @@ class Simple2DPlanner(ParameterizedPlanner):
             goal_dict[self.state_key] = self.to_tensor(goal_dict[self.state_key])
             goal_dict[self.state_key][:2] += self.offset
 
+            if "reference_trajectory" in goal_dict.keys():
+                goal_dict["reference_trajectory"].x_des += self.offset
+
         return obs_dict, goal_dict
     
     def postprocess_plan(self, plan):
@@ -299,44 +329,92 @@ class Simple2DPlanner(ParameterizedPlanner):
         """
         Get J(k; problem_data)
 
+        Args:
+            k : normalized trajectory parameter, numpy array, this corresponds to the indeterminate of the generators
         Returns:
             Obj: objective function value
             Grad: gradient of the objective function
         """
         assert k.shape[0] == len(self.opt_dim) and k.ndim == 1
-        k    = k*self.FRS_info["delta_k"][self.opt_dim]+self.FRS_info["c_k"][self.opt_dim]
-
-        meta_data = problem_data["meta"]
-        x0 = meta_data["state"]
-        pos0 = x0[:2]
-        v0   = x0[2:]
-        t_pk = self.time_pieces[0]
-        k = self.to_tensor(k)
-        
-
-        data = problem_data["objective"]["goal"]
-        goal = data["target"]
 
 
-        # goal objective
-        pos              = pos0 + v0*t_pk + 1/2*k*t_pk**2            # accelerating
-        pos              = pos  + (v0 + k*t_pk)*(self.t_f-t_pk)/2    # braking
+        # parse the initial condition of the backup plan
+        meta_data  = problem_data["meta"]
+        pos0       = meta_data["state"][:2]
+        v0         = meta_data["state"][2:] 
 
-        grad_pos_to_k    = (1/2*t_pk**2 + t_pk*(self.t_f-t_pk)/2) * torch.eye(2)
+        # transform the trajectory parameter to the original domain
+        k                = k*self.FRS_info["delta_k"][self.opt_dim]+self.FRS_info["c_k"][self.opt_dim]
+        k                = self.to_tensor(k)
         grad_k_to_beta   = torch.diag(self.FRS_info["delta_k"][self.opt_dim])
-        grad_pos_to_beta = grad_pos_to_k @ grad_k_to_beta 
 
-        cost_goal              = torch.sum((pos - goal)**2)
-        grad_cost_goal_to_beta = 2*(pos - goal) @ grad_pos_to_beta      # (1, n_optvar)
 
+        # (1) Projection Objective
+        # The objective tries to minimize the distance between the desired trajectory and the backup plan
+
+        cost = {}
+        grad_cost = {}
+
+        # (1-1) parse the required data
+        if "projection" in self.weight_dict.keys() and self.weight_dict["projection"] > 0:
+            data = problem_data["objective"]["projection"]
+            desired_plan_orig = data["reference_trajectory"]
+
+            # the desired plan only projects the plan within horizon
+            desired_plan = desired_plan_orig[desired_plan_orig.t_des <= self.t_f] 
+
+            # (1-2) compute the cost and the gradient
+            pos, _, gradpos_to_k   = self.model(desired_plan.t_des, 
+                                                pos0, 
+                                                torch.cat([v0, k]), 
+                                                return_gradient=True) # (n_timestep, n_pos, n_optvar)
+            pos                    = pos[0]                                                            # (n_timestep, n_pos)
+            gradpos_to_k           = gradpos_to_k[0]                                                   # (n_timestep, n_pos, n_optvar)
+
+            pos_err                = pos - desired_plan.x_des
+            grad_pos_err_to_k      = gradpos_to_k
+
+            cost_proj              = torch.sum(torch.mean(pos_err**2, dim=0))                     
+            grad_cost_proj_to_k    = 2*torch.bmm(pos_err.unsqueeze(-2), grad_pos_err_to_k).squeeze(-2) # (n_timestep, n_optvar)
+            grad_cost_proj_to_k    = torch.mean(grad_cost_proj_to_k, dim=0)                            # (n_optvar,)
+            grad_cost_proj_to_beta = grad_cost_proj_to_k @ grad_k_to_beta                              # (n_timestep, n_optvar)
+
+            cost["projection"] = cost_proj
+            grad_cost["projection"] = grad_cost_proj_to_beta
+
+        # (2) Goal objective
+        # The objective tries to minimize the distance between the final position and the goal
+        if "goal" in self.weight_dict.keys() and self.weight_dict["goal"] > 0:
+            data = problem_data["objective"]["goal"]
+            goal = data["target"]
+
+            pos, _, gradpos_to_k   = self.model(torch.tensor([0, self.t_f]), 
+                                                pos0, 
+                                                torch.cat([v0, k]), 
+                                                return_gradient=True)
+            
+            pos_last               = pos[0][-1]
+            gradpos_to_k_last      = gradpos_to_k[0][-1]
+
+            goal_err               = pos_last - goal
+            cost_goal              = torch.sum(goal_err**2)
+
+            grad_cost_goal_to_k    = (2*goal_err.unsqueeze(-2) @ gradpos_to_k_last).squeeze(-2)
+            grad_cost_goal_to_beta = grad_cost_goal_to_k @ grad_k_to_beta
+
+            cost["goal"] = cost_goal
+            grad_cost["goal"] = grad_cost_goal_to_beta
 
         # weighting
-        cost = cost_goal
-        grad = grad_cost_goal_to_beta
+        total_cost = self.to_tensor(0)
+        total_grad = self.to_tensor(torch.zeros_like(k))
+        for key in cost.keys():
+            total_cost += cost[key] * self.weight_dict[key]
+            total_grad += grad_cost[key] *self.weight_dict[key]
 
         # detaching
-        Obj = cost.cpu().numpy()
-        Grad = grad.cpu().numpy()
+        Obj = total_cost.cpu().numpy()
+        Grad = total_grad.cpu().numpy()
 
         return (Obj, Grad)
 
@@ -439,7 +517,8 @@ class Simple2DPlanner(ParameterizedPlanner):
         assert isinstance(plan, ReferenceTrajectory), "The plan should be the instance of ReferenceTrajectory"
         assert "zonotope" in obs.keys() and "robot" in obs["zonotope"].keys() and "obstacle" in obs["zonotope"].keys()
         robot_zonotope = obs["zonotope"]["robot"][0].project([0, 1])
-        assert(torch.allclose(robot_zonotope.center, plan[0][1]+self.offset), "The plan is not consistent with the current position")
+        assert(torch.allclose(robot_zonotope.center, plan[0][1]+self.offset, 1e-6), 
+               "The plan is not consistent with the current position")
 
         obstacle_zonos = [zono.project([0, 1]) for zono in obs["zonotope"]["obstacle"]]
 
@@ -454,6 +533,28 @@ class Simple2DPlanner(ParameterizedPlanner):
                     return True
 
         return False
+    
+    def __call__(self, obs_dict, goal_dict, random_initialization=False):
+        """
+        Plan the trajectory given the observation and the goal
+
+        Args
+            obs_dict: observation dictionary
+            goal_dict: goal dictionary
+            random_initialization: bool, whether to initialize the trajectory parameter randomly
+
+        Returns
+            plan: ReferenceTrajectory object
+            actions: (n_timesteps, n_action) np.ndarray
+        """
+        plan, info = super().__call__(obs_dict, goal_dict, random_initialization=random_initialization)
+
+        if info["status"] == 0:
+            k_opt = plan.get_trajectory_parameter()
+            self.FRS = self.get_FRS_from_obs_and_optvar(obs_dict, k_opt[self.opt_dim])
+            self.plan = plan
+
+        return plan, info
 
     def get_FRS_from_obs_and_optvar(self, obs_dict, k_opt):
         """

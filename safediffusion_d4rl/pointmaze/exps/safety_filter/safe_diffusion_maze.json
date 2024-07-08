@@ -9,7 +9,7 @@
             "zonotope":{
                 "robot":{
                     "color": "black",
-                    "alpha": 0.5
+                    "alpha": 0
                 },
                 "static_obs":{
                     "linewidth": 0,

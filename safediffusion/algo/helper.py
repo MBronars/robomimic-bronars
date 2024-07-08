@@ -75,7 +75,8 @@ def traj_uniform_acc(t, x0, v0, a):
     B, D_x = x0.shape
     N_t = t.shape[0]
 
-    t = torch.tensor(t)
+    if not isinstance(t, torch.Tensor):
+        t = torch.tensor(t)
     t_expanded = torch.unsqueeze(t, dim=1)
     t_squared = t_expanded ** 2
 

@@ -1,8 +1,16 @@
+import os
 import numpy as np
 
 from safediffusion.envs.env_zonotope import ZonotopeEnv
 import torch
 import matplotlib.pyplot as plt
+
+# decide which zonotope library to use
+use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
+if use_zonopy: 
+    from zonopy.contset import zonotope
+else: 
+    from safediffusion.armtdpy.reachability.conSet import zonotope
 
 class SafeMazeEnv(ZonotopeEnv):
     """
@@ -23,6 +31,12 @@ class SafeMazeEnv(ZonotopeEnv):
         # Transformation between the worlds
         self.d4rlmazepos_to_worldpos = np.array([1, 1])
         self.robotqpos_to_worldpos = self.get_robot_to_world_transformation()
+
+        self.success_radius = 0.1
+
+        self.success        = False
+        self.done           = False
+        
 
     # --------------------- Helper Function ------------------------------ #
     def set_state(self, pos, vel):
@@ -56,6 +70,16 @@ class SafeMazeEnv(ZonotopeEnv):
         offset = world_robotpos - body_robotpos
 
         return offset
+    
+    def is_success(self):
+        """
+        Maze 2D environment is successful when the agent reaches the target
+
+        Pointmaze environment does not return success info, so overriden.
+        """
+        dict = {"task": self.success}
+
+        return dict
 
     # ------------------- SafetyEnv related functions -------------------#
     def is_safe(self):
@@ -86,6 +110,62 @@ class SafeMazeEnv(ZonotopeEnv):
         obs = super().get_observation(obs)
         return obs
     
+    def reset(self):
+        """
+        Reset the environment
+        """
+        obs = super().reset()
+        self.success = False
+        self.done = False
+
+        return obs
+    
+    def reset_to(self, state_dict):
+        """
+        Reset the environment to the given state
+
+        Args:
+            state_dict (dict): dictionary containing the states to reset
+
+        Returns:
+            obs (np.ndarray): observation
+        """
+        obs = super().reset_to(state_dict)
+        self.success = False
+        self.done = False
+
+        return obs
+
+    def step(self, action):
+        """
+        Step the environment with the given action
+
+        Args:
+            action (np.ndarray): action to take
+
+        Returns:
+            obs (np.ndarray): observation
+            reward (float): reward
+            done (bool): done flag
+            info (dict): info dictionary
+        """
+        obs, reward, done, info = super().step(action)
+        
+        # Update the success flag
+        goal_qpos = self.get_goal()["flat"][:2]
+
+        # Environment is frame stacking wrapper. Retrieve the most recent one.
+        if obs["flat"][:2].ndim == 2:
+            qpos = obs["flat"][-1, :2]
+        else:
+            qpos = obs["flat"][:2]
+
+        if np.linalg.norm(goal_qpos - qpos) <= self.success_radius:
+            self.success = True
+            done = True
+    
+        return obs, reward, done, info
+    
     def get_goal(self):
         """
         Get the goal qpos, qvel configuration for the robot
@@ -114,6 +194,14 @@ class SafeMazeEnv(ZonotopeEnv):
         
         pos = pos - self.d4rlmazepos_to_worldpos # goal d4rl pos
         self.unwrapped_env.set_target(target_location=pos)
+
+        pos_world = pos + self.d4rlmazepos_to_worldpos
+        c = torch.hstack([torch.tensor(pos_world), torch.tensor(0)])
+        G = torch.eye(3) * 0.1
+        Z = torch.vstack([c, G])
+        goal_zonotope = zonotope(Z)
+
+        self.goal_zonotope = goal_zonotope
 
         return self.get_goal()
 

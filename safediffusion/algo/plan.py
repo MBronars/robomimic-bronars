@@ -30,7 +30,10 @@ class ReferenceTrajectory:
         self._created_from_traj_param = False
     
     def to_tensor(self, x):
-        return torch.tensor(x, dtype=self.dtype, device=self.device)
+        if isinstance(x, torch.Tensor):
+            return x
+        else:
+            return torch.tensor(x, dtype=self.dtype, device=self.device)
 
 
     def __getitem__(self, key):

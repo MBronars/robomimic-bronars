@@ -7,6 +7,7 @@ from typing import Any
 from collections import deque
 
 import torch
+import numpy as np
 
 from robomimic.algo import RolloutPolicy
 from safediffusion.algo.plan import ReferenceTrajectory
@@ -37,22 +38,35 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         self.rollout_policy_obs_keys = self.rollout_policy.policy.global_config.all_obs_keys
         
         # backup policy-related
-        # TODO: fill-in the backup policy observation keys
+        self.backup_policy_weight_keys = self.backup_policy.weight_dict.keys()
         
-        # Safety filter parameter
-        self.n_head         = config["filter"]["n_head"]    # length of the head actions (each unit corresponds to action applied to the environment)
+        # safety filter parameter
+        self.n_head            = config["filter"]["n_head"]    # length of the head actions (each unit corresponds to action applied to the environment)
+        self.max_init_attempts = config["filter"]["max_init_attempts"] # maximum number of attempts to initialize the backup plan
 
-        # Safety filter data structure
+        # internal data structure & data
         self._backup_plan   = None                          # backup plan (reference trajectory)
         self._actions_queue = deque()                       # queue of safe actions
+        self.nominal_plan   = None
+        self.intervened     = False
+        self.verbose        = config["filter"]["verbose"]
+
+        
     
     def __call__(self, ob, goal=None):
         """
         Main entry point of our receding-horizon safety filter.
 
         If the action queue is empty, we generate a new plan and check the safety.
+
+        NOTE: In this version, the nominal policy generates the plan based on the o_{t}.
+              Ideally, the policy should generate the plan based on the o_{t+T_a}. 
+              This version is equivalent to assuming the perfect state prediction.
         """
         if len(self._actions_queue) == 0:
+            if self.has_no_backup_plan():
+                self.initialize_backup_plan(ob, goal)
+
             (plan, actions) = self.get_plan_from_nominal_policy(ob, goal)
             info            = self.monitor_and_compute_backup_plan(plan, ob, goal)
 
@@ -74,7 +88,27 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             self.nominal_plan = plan
             self.intervened   = not is_safe
 
+            # summarize
+            k_backup = self._backup_plan.get_trajectory_parameter().cpu().numpy()
+            msg = f'Using Diffusion: {not self.intervened} | ' + \
+                  f'Head Plan Safety: {info["head_plan"]}  | ' + \
+                  f'{len(self._backup_plan)} backup actions left: (k={np.round(k_backup, 2)})'
+            self.disp(msg)
+
         return self._actions_queue.popleft()
+    
+    def has_no_backup_plan(self):
+        """
+        Check whether the backup plan is empty
+        """
+        return self._backup_plan is None or len(self._backup_plan) <= 1
+    
+    @abc.abstractmethod
+    def safety_critical_state_keys(self):
+        """
+        Return the keys of the safety-critical states
+        """
+        raise NotImplementedError
     
     def check():
         """
@@ -83,6 +117,34 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         TODO: PLEASE IMPLEMENT THIS FUNCTION
         """
         pass
+
+    def initialize_backup_plan(self, ob, goal):
+        """
+        Initialize the backup plan from the initial state of the environment
+
+        Args
+            ob   : observation dictionary
+            goal : goal dictionary
+        """
+        ob_init, goal_init = self.process_dicts_for_backup_policy(ob=ob, goal=goal, plan=None)
+
+        # set backup policy objective function null, trajectory optimization finds the feasible solution only
+        weight_dict = {k: 0.0 for k in self.backup_policy_weight_keys}
+        self.backup_policy.update_weight(weight_dict)
+            
+        count = 0
+        while count < self.max_init_attempts:
+            backup_plan, info = self.backup_policy(obs_dict              = ob_init, 
+                                                   goal_dict             = goal_init, 
+                                                   random_initialization = True)
+            if info["status"] == 0:
+                self.set_backup_plan(backup_plan)
+                break
+
+            count += 1
+        
+        if count == self.max_init_attempts:
+            raise ValueError("Failed to initialize the backup plan")
     
     def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         """
@@ -125,8 +187,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             backup_plan
         """
 
-        ob_backup, goal_backup = self.process_dicts_for_backup_policy(plan, ob, goal)
+        ob_backup, goal_backup = self.process_dicts_for_backup_policy(ob=ob, goal=goal, plan=plan)
 
+        self.update_backup_policy_weight()
         backup_plan, info = self.backup_policy(obs_dict=ob_backup, goal_dict=goal_backup)
 
         if info["status"] == 0:
@@ -134,11 +197,21 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         else:
             return None
 
+    def disp(self, msg):
+        print(f"[{self.__class__.__name__}]:      {msg}")
+
     # ------------------------------------------------------------------------------------ #
     # ------------------------- Abstract class to override ------------------------------  #
     # ------------------------------------------------------------------------------------ #
     @abc.abstractmethod
-    def process_dicts_for_backup_policy(self, plan, ob, goal):
+    def update_backup_policy_weight(self):
+        """
+        Update the weight dictionary of the backup policy according to the internal status.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def process_dicts_for_backup_policy(self, ob, goal, plan):
         """
         Given the plan, observation dictionary, and goal dictionary from the environment (Safety Wrapper)
         preprocess the data to be compatible with the backup policy
@@ -170,22 +243,6 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             actions: (B, T_p, D_a) np.ndarray
         """
         raise NotImplementedError
-    
-    # @abc.abstractmethod
-    # def preprocess_to_reference_traj(self, obs, actions):
-    #     """
-    #     Given the observation and action sequences, preprocess to reference trajectory.
-
-    #     Implementation of prediction function (o_{t}, a_{t..t+P}) -> (s_{t..t+T_p})
-
-    #     Args
-    #         obs     : (B, T_o, D_o) np.ndarray
-    #         actions : (B, T_p, D_a) np.ndarray
-        
-    #     Returns
-    #         reference_traj: (B, 1) ReferenceTrajectory array
-    #     """
-    #     raise NotImplementedError
     
     @abc.abstractmethod
     def postprocess_to_actions(self, reference_traj, ob):
@@ -254,6 +311,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         """
         self.rollout_policy.start_episode()
         self.clear_backup_plan()
+        self._actions_queue.clear()
+        self.nominal_plan   = None
+        self.intervened     = False
 
     def _prepare_observation(self, ob):
         """
