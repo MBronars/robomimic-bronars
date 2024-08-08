@@ -7,9 +7,12 @@ import numpy as np
 
 import robomimic
 
+from safediffusion.utils.rand_utils import set_random_seed
+
 import safediffusion_d4rl.pointmaze.utils as MazeUtils
 
 from d4rl.pointmaze.maze_model import MEDIUM_MAZE_UNSAFE
+
 
 # largemaze + diffusion policy
 POLICY_PATH = os.path.join(robomimic.__path__[0],
@@ -32,6 +35,8 @@ if __name__ == "__main__":
     x0               = np.array([3.2, 5.5, 0.1, 0.0])
     target_pos       = np.array([2.0, 7.0])
     # ----------------------------------------- #
+    set_random_seed(42)
+
     policy, env, config = MazeUtils.policy_and_env_from_checkpoint_and_config(
                                         ckpt_path, 
                                         config_json_path, 

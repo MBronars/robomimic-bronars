@@ -49,11 +49,14 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
 
         # Plan (optional)
         self.safety.render.zonotope.plan.color = "blue"
-        self.safety.render.zonotope.plan.linewidth = 5.0
+        self.safety.render.zonotope.plan.linewidth = 8.0
         self.safety.render.zonotope.plan.linestyle = "-"
 
         self.safety.render.zonotope.backup_plan.color = "green"
         self.safety.render.zonotope.backup_plan.linewidth = 1.0
         self.safety.render.zonotope.backup_plan.linestyle = "--"
+
+        self.safety.render.zonotope.plans.linewidth = 2.0
+        self.safety.render.zonotope.plans.linestyle = "-"
 
         

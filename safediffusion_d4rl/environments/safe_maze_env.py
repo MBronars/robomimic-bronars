@@ -32,7 +32,7 @@ class SafeMazeEnv(ZonotopeEnv):
         self.d4rlmazepos_to_worldpos = np.array([1, 1])
         self.robotqpos_to_worldpos = self.get_robot_to_world_transformation()
 
-        self.success_radius = 0.1
+        self.success_radius = 0.2
 
         self.success        = False
         self.done           = False

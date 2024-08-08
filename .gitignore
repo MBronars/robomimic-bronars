@@ -127,3 +127,6 @@ macros_private.py
 
 # videos
 planning_videos/*
+
+# experiment results
+safediffusion_d4rl/pointmaze/exps/

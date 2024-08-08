@@ -49,7 +49,8 @@ class ZonotopeEnv(SafetyEnv):
 
         self.plots = {
             "plan": None,
-            "backup_plan": None
+            "backup_plan": None,
+            "plans": None
         }
 
     def get_observation(self, obs=None):
@@ -320,6 +321,29 @@ class ZonotopeEnv(SafetyEnv):
                                                      linewidth = self.render_setting["backup_plan"]["linewidth"],
                                                      linestyle = self.render_setting["backup_plan"]["linestyle"]
                                                     )
+        
+        if "plans" in kwargs.keys():
+            # Remove existing plot if any
+            if self.plots["plans"] is not None:
+                for line in self.plots["plans"]:
+                    line.remove()
+            
+            # Initialize list to hold plot objects
+            self.plots["plans"] = []
+            
+            # Generate a colormap
+            colormap = plt.cm.get_cmap('tab10', len(kwargs["plans"]))
+            
+            # Plot each trajectory with a different color
+            for i in range(len(kwargs["plans"])):
+                plan = kwargs["plans"][i]
+                color = colormap(i / len(kwargs["plans"]))
+                line, = self.ax.plot(plan[:, 0], plan[:, 1], 
+                                    color     = color, 
+                                    linewidth = self.render_setting["plans"]["linewidth"],
+                                    linestyle = self.render_setting["plans"]["linestyle"],
+                                    alpha     = 0.6)
+                self.plots["plans"].append(line)
         
         if hasattr(self, "goal_zonotope"):
             # goal zonotopes: TODO

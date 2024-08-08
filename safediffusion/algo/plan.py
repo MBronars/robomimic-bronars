@@ -6,7 +6,7 @@ class ReferenceTrajectory:
     # TODO: change the dtype and device
     # TODO: change the code accordingly for the safety filter
     def __init__(self, t_des, x_des, dx_des=None, dtype=torch.float32, device=torch.device("cpu")):
-        assert t_des.shape[0] == x_des.shape[0]
+        assert t_des.shape[0] == x_des.shape[0], "The length of stamps and trajs should be same"
 
         if dx_des is None:
             # If dx_des is not provided, compute it from x_des using forward difference

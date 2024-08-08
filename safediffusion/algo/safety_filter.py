@@ -2,6 +2,7 @@
 Implementation of the safety filter algorithm.
 """
 import abc
+import time
 from copy import deepcopy
 from typing import Any
 from collections import deque
@@ -43,17 +44,16 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         # safety filter parameter
         self.n_head            = config["filter"]["n_head"]    # length of the head actions (each unit corresponds to action applied to the environment)
         self.max_init_attempts = config["filter"]["max_init_attempts"] # maximum number of attempts to initialize the backup plan
+        self.verbose           = config["filter"]["verbose"]
 
         # internal data structure & data
         self._backup_plan   = None                          # backup plan (reference trajectory)
         self._actions_queue = deque()                       # queue of safe actions
         self.nominal_plan   = None
         self.intervened     = False
-        self.verbose        = config["filter"]["verbose"]
+        self.stuck          = False                         # robot is stuck - no feasible backup plan could be found
 
-        
-    
-    def __call__(self, ob, goal=None):
+    def __call__(self, ob, goal=None, **kwargs):
         """
         Main entry point of our receding-horizon safety filter.
 
@@ -67,7 +67,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             if self.has_no_backup_plan():
                 self.initialize_backup_plan(ob, goal)
 
-            (plan, actions) = self.get_plan_from_nominal_policy(ob, goal)
+            (plan, actions) = self.get_plan_from_nominal_policy(ob, goal, **kwargs)
             info            = self.monitor_and_compute_backup_plan(plan, ob, goal)
 
             # Definition of safety in this framework
@@ -144,7 +144,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             count += 1
         
         if count == self.max_init_attempts:
-            raise ValueError("Failed to initialize the backup plan")
+            self.stuck = True
     
     def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         """
@@ -169,7 +169,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         if is_head_plan_safe:
             tail_plan = plan[self.n_head:]
             tail_plan.set_start_time(0)
-            backup_plan = self.compute_backup_plan(tail_plan, ob, goal)
+            backup_plan, _ = self.compute_backup_plan(tail_plan, ob, goal)
             info["backup_plan"] = backup_plan
 
         return info
@@ -193,9 +193,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         backup_plan, info = self.backup_policy(obs_dict=ob_backup, goal_dict=goal_backup)
 
         if info["status"] == 0:
-            return backup_plan
+            return backup_plan, info
         else:
-            return None
+            return None, info
 
     def disp(self, msg):
         print(f"[{self.__class__.__name__}]:      {msg}")
@@ -309,11 +309,19 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         """
         Prepare the policy to start a new rollout.
         """
+        # initialize the rollout policy
         self.rollout_policy.start_episode()
+
+        # initialize the backup policy
+        self.backup_policy.start_episode()
+
+        # initialize the safety filter internal variables
         self.clear_backup_plan()
         self._actions_queue.clear()
         self.nominal_plan   = None
         self.intervened     = False
+        self.stuck          = False
+        self.ranking_info   = None
 
     def _prepare_observation(self, ob):
         """
@@ -333,7 +341,11 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
 class SafeDiffusionPolicy(SafetyFilter):
     """
     Diffusion-specific algorithms (e.g., guiding)
-    """
-    def __call__(self, ob, goal=None):
-        # TODO: Implement guiding here
-        return super().__call__(ob, goal)
+    """    
+    def rank_plans(plans, obs, goal):
+        """
+        Rank the plans based on the safety and performance criteria
+
+        This is optional
+        """
+        raise NotImplementedError

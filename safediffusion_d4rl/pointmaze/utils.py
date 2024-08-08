@@ -4,6 +4,7 @@ from copy import deepcopy
 
 import numpy as np
 import torch
+import json
 
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.torch_utils as TorchUtils
@@ -14,15 +15,17 @@ from safediffusion.utils.rand_utils import set_random_seed
 from safediffusion.envs.env_safety import SafetyEnv
 
 from safediffusion_d4rl.environments.safe_maze_env import SafeMazeEnv
-from safediffusion_d4rl.algo.safety_filter_maze import SafeDiffusionPolicyMaze, IdentityDiffusionPolicyMaze
+from safediffusion_d4rl.algo.safety_filter_maze import SafeDiffusionPolicyMaze, IdentityDiffusionPolicyMaze, SafeDiffuserMaze
 from safediffusion_d4rl.algo.planner_maze import Simple2DPlanner
+from safediffusion_d4rl.algo.predictor_maze import MazeEnvSimStatePredictor, DiffuserStatePredictor
 
 
-from d4rl.pointmaze.maze_model import MEDIUM_MAZE_OPEN, LARGE_MAZE_OPEN
+from d4rl.pointmaze.maze_model import MEDIUM_MAZE_OPEN, LARGE_MAZE_OPEN, MEDIUM_MAZE
 
 OPEN_MAZE_DICT = {
     "large" : LARGE_MAZE_OPEN,
-    "medium": MEDIUM_MAZE_OPEN
+    "medium": MEDIUM_MAZE
+    # "medium": MEDIUM_MAZE_OPEN
 }
 
 # ------------------------------------------------ #
@@ -105,6 +108,7 @@ def rollout(policy,
         success = env.is_success()["task"]
         is_safe = next_obs.pop("safe")
         is_intervened = policy.intervened
+        stuck = policy.stuck
 
         if step_i % video_skip == 0:
             if step_i == 0 or not is_intervened:
@@ -122,8 +126,8 @@ def rollout(policy,
             video_writer.append_data(img)
         
         # termination conditions
-        if len(policy._backup_plan) == 0:
-            print("No backup plan available")
+        if policy.stuck:
+            print("Stuck!")
             break
 
         if success:
@@ -143,10 +147,12 @@ def rollout(policy,
                  Success = success,
                  Horizon = (step_i + 1),
                  Collision = num_unsafe,
-                 Intervention = num_intervention
+                 Intervention = num_intervention,
+                 Stuck   = stuck
                  )
-
-
+    
+    with open(os.path.join(save_dir, "stats.json"), "w") as f:
+        json.dump(stats, f, indent=4)
     return stats
 
 def rollout_random_seed(policy,
@@ -208,7 +214,7 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
         env_kwargs (dict): additional environment arguments
         policy_kwargs (dict): additional policy arguments
     """
-    assert policy_type in ["diffusion", "safety_filter", "backup"]
+    assert policy_type in ["diffusion", "safety_filter", "backup", "safe_diffuser"]
 
     config = load_config_from_json(config_path)
 
@@ -244,6 +250,7 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
     
     # wrap the environment with the safety wrapper
     env_safe      = SafeMazeEnv(env, **config.safety)
+    dt_action = env_safe.sim.model.opt.timestep
 
     
     # wrap the policy that needs 1) state predictor and 2) backup_policy
@@ -253,21 +260,31 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
     ckpt_dictCopy["env_metadata"]["env_kwargs"]["maze_spec"] = OPEN_MAZE_DICT[maze_size_str]
     envCopy, _   = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dictCopy, render=False, render_offscreen=True, verbose=True)
     envCopy_safe = SafeMazeEnv(envCopy, **config.safety)
+    predictor = MazeEnvSimStatePredictor(envCopy_safe)
 
+    # predictor = DiffuserStatePredictor(rollout_policy = policy, dt = dt_action)
     # load the wrapped policy
     if policy_type == "diffusion":
         policy_wrapped  = IdentityDiffusionPolicyMaze(
                                         rollout_policy = policy, 
                                         backup_policy  = Simple2DPlanner(verbose=config.safety.trajopt.verbose),
-                                        dt_action      = env_safe.sim.model.opt.timestep,
-                                        predictor      = envCopy_safe,
+                                        dt_action      = dt_action,
+                                        predictor      = predictor,
                                         **config.safety)
+    elif policy_type == "safe_diffuser":
+        policy_wrapped  = SafeDiffuserMaze(
+                                        rollout_policy = policy, 
+                                        backup_policy  = Simple2DPlanner(verbose=config.safety.trajopt.verbose),
+                                        dt_action      = dt_action,
+                                        predictor      = predictor,
+                                        **config.safety)
+
     elif policy_type == "safety_filter":
         policy_wrapped  = SafeDiffusionPolicyMaze(
                                         rollout_policy = policy, 
                                         backup_policy  = Simple2DPlanner(verbose=config.safety.trajopt.verbose),
-                                        dt_action      = env_safe.sim.model.opt.timestep,
-                                        predictor      = envCopy_safe,
+                                        dt_action      = dt_action,
+                                        predictor      = predictor,
                                         **config.safety)
     elif policy_type == "backup":
         policy_wrapped  = Simple2DPlanner(verbose=config.safety.trajopt.verbose)

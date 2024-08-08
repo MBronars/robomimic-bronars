@@ -10,6 +10,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import einops
 # requires diffusers==0.11.1
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
@@ -314,7 +315,7 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # HACK: Seems like the observation is already padded from the reset function in the environment
         for k in obs_dict.keys():
             if len(obs_dict[k].shape) == 3 and obs_dict[k].shape[-2] == To:
-                obs_dict[k] = obs_dict[k][:, 0, :]
+                obs_dict[k] = obs_dict[k][:, -1, :]
 
         assert(min([len(obs_dict[k].shape) for k in obs_dict.keys()]) == 2)
 
@@ -353,6 +354,101 @@ class DiffusionPolicyUNet(PolicyAlgo):
         # [1,Da]
         action = action.unsqueeze(0)
         return action
+    
+    def get_multi_actions(self, obs_dict, goal_dict=None, num_trajectories=1):
+        """
+        Get multiple trajectories from the policy.
+
+        Args:
+            obs_dict (dict): current observation [1, Do]
+            goal_dict (dict): (optional) goal
+            num_trajectories (int): number of trajectories to create
+
+        Returns:
+            action_trajectories (torch.Tensor): action tensor [1, Da]
+        """
+        # obs_dict: key: [1, To, Do]
+        To = self.algo_config.horizon.observation_horizon
+        Ta = self.algo_config.horizon.action_horizon
+        Tp = self.algo_config.horizon.prediction_horizon
+
+        for k in obs_dict.keys():
+            if len(obs_dict[k].shape) == 3 and obs_dict[k].shape[-2] == To:
+                obs_dict[k] = obs_dict[k][:, -1, :]
+
+        n_repeats = max(To - len(self.obs_queue), 1)
+        self.obs_queue.extend([obs_dict] * n_repeats)
+
+        obs_dict_list = TensorUtils.list_of_flat_dict_to_dict_of_list(list(self.obs_queue))
+        obs_dict_tensor = dict((k, torch.cat(v, dim=0).unsqueeze(0)) for k, v in obs_dict_list.items())
+        obs_dict_tensor = dict((k, v.squeeze(-1)) for k, v in obs_dict_tensor.items())
+        obs_dict_tensor = dict((k, einops.repeat(v, '1 t d -> b t d', b=num_trajectories, t=To, d=self.obs_shapes[k][0])) 
+                                for k, v in obs_dict_tensor.items())
+
+        if goal_dict is not None:
+            goal_dict = {k: goal_dict[k].unsqueeze(1) for k in goal_dict}
+            goal_dict = {k: v.repeat((1, To) + (1,) * (v.dim() - 2)) for k, v in goal_dict.items()}
+            goal_dict = {k: einops.repeat(v, '1 t d -> b t d', b=num_trajectories, t=To, d=self.goal_shapes[k][0])
+                         for k, v in goal_dict.items()}
+
+        action_dim = self.ac_dim
+        if self.algo_config.ddpm.enabled is True:
+            num_inference_timesteps = self.algo_config.ddpm.num_inference_timesteps
+        elif self.algo_config.ddim.enabled is True:
+            num_inference_timesteps = self.algo_config.ddim.num_inference_timesteps
+        else:
+            raise ValueError
+        
+        nets = self.nets
+        if self.ema is not None:
+            self.ema.copy_to(parameters=self._shadow_nets.parameters())
+            nets = self._shadow_nets
+
+        inputs = {
+            'obs': obs_dict_tensor,  # (B, To, D)
+            'goal': goal_dict        # (B, To, D)
+        }
+
+        for k in self.obs_shapes:
+            # inputs['obs'][k] should be [B, T, D1, D2, ..., Dn] for inputs
+            assert inputs['obs'][k].ndim - 2 == len(self.obs_shapes[k])
+        
+        for k in self.goal_shapes:
+            assert inputs['goal'][k].ndim - 2 == len(self.goal_shapes[k])
+        
+        obs_features = TensorUtils.time_distributed(inputs, self.nets['policy']['obs_encoder'], inputs_as_kwargs=True)
+        assert obs_features.ndim == 3  # [B, T, D]
+        B = obs_features.shape[0]
+
+        # (B, obs_horizon*obs_dim)
+        obs_cond = obs_features.flatten(start_dim=1)
+
+        noisy_action = torch.randn(
+            (B, Tp, action_dim + self.obs_dim), device=self.device)
+        naction = noisy_action
+
+        # init scheduler
+        self.noise_scheduler.set_timesteps(num_inference_timesteps)
+
+        for k in self.noise_scheduler.timesteps:
+            noise_pred = nets['policy']['noise_pred_net'](
+                sample=naction, 
+                timestep=k,
+                global_cond=obs_cond
+            )
+
+            naction = self.noise_scheduler.step(
+                model_output=noise_pred,
+                timestep=k,
+                sample=naction
+            ).prev_sample
+
+        start    = To - 1
+        end      = start + Ta
+        actions  = naction[:, start:, :action_dim]
+        pred_obs = naction[:, start:, action_dim:]
+
+        return actions, pred_obs
         
     def _get_action_trajectory(self, obs_dict, goal_dict=None):
         assert not self.nets.training

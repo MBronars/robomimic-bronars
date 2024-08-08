@@ -108,13 +108,17 @@ class ParameterizedPlanner(abc.ABC):
         if "verbose" in kwargs.keys():
             self.verbose = kwargs["verbose"]
 
-        self.render_kwargs = None
-        # directory to save the plan
-        if "render" in kwargs.keys():
-            self.render_kwargs = kwargs["render"]
-
         # weight for the trajectory optimization
         self.weight_dict = {}
+
+        # internal variables
+        self.FRS = None
+        # # directory to save the plan
+        # self.render_kwargs = None
+        # if "render" in kwargs.keys():
+        #     self.render_kwargs = kwargs["render"]
+
+        
 
     @abc.abstractmethod
     def model(self, t, init_state, param):
@@ -177,6 +181,12 @@ class ParameterizedPlanner(abc.ABC):
         NOTE: Make sure to deepcopy the obs_dict and goal_dict
         """
         raise NotImplementedError
+    
+    def start_episode(self):
+        """
+        Start the episode
+        """
+        self.FRS = None
     
     def update_weight(self, weight_dict):
         """
@@ -257,6 +267,12 @@ class ParameterizedPlanner(abc.ABC):
         
         Returns:
             k_opt (torch.tensor): optimized trajectory parameter
+            info: information of the optimization
+                'x'       : the array of solution values, normalized trajectory parameter
+                'g'       : the values of the constraints at the solution
+                'obj_val' : the objective value at the solution
+                'multi_g' : the Langrange multipliers associated with the constraints: sensitivity of the objective function w.r.t. the constraints
+                'multi_x' : the Langrange multipliers associated with the bounds: sensitivity of the objective function w.r.t. the bounds
         """
         problem_data  = self._prepare_problem_data(obs_dict, goal_dict, random_initialization=random_initialization)
         problem       = TrajectoryOptimization(self, problem_data, verbose=self.verbose)
@@ -285,7 +301,7 @@ class ParameterizedPlanner(abc.ABC):
         k_opt = k_opt * self.FRS_info["delta_k"][self.opt_dim]
 
         self.disp(f"x0: {problem_data['meta']['state']}")
-        if info["status"] is not 0:
+        if info["status"] != 0:
             self.disp(info["status_msg"])
         else:
             self.disp("Algorithm Feasible")
@@ -310,7 +326,7 @@ class ParameterizedPlanner(abc.ABC):
     def compute_constraints(self, x, problem_data):
         """
         Prepare the constraints for the trajectory optimization
-q
+
         NOTE: we need to implement try and except block since cyipopt does not handle exceptions
         
         x: (n_optvar,), flattened trajectory
@@ -335,33 +351,6 @@ q
         else:
             return torch.tensor(x, dtype=self.dtype, device=self.device)
 
-    def render(self, init_state, param):
-        """
-        Render the plan
-        """
-        t_des, x_des = self(init_state, param)
-        
-        fig, axs = plt.subplots(self.n_state, 1)
-        axs = axs.flatten()  # Flatten in case of more than one row
-        
-        # Plot each item in its own subplot
-        for i, (k, v) in enumerate(self.state_dict.items()):
-            ax = axs[i]
-            ax.plot(t_des, x_des[v, :], label=k)
-            ax.legend()
-            ax.grid(True)
-            ax.set_title(k)
-
-        if self.render_kwargs["render_online"]:
-            plt.show()
-        
-        if self.render_kwargs["render_offline"]:
-            os.makedirs(self.render_kwargs["save_dir"], exist_ok=True)
-            save_path = os.path.join(self.render_kwargs["save_dir"], 
-                                     f"plan_s{init_state}_k{param}.png")
-            plt.savefig(save_path, format='png')
-            plt.close(fig)
-
     def disp(self, msg):
         print(f"[{self.__class__.__name__}]:        {msg}")
 
@@ -376,3 +365,32 @@ q
     @property
     def n_timestep(self):
         return int(self.t_f / self.dt) + 1
+    
+
+    # ----------------- Deprecated ----------------- #
+    # def render(self, init_state, param):
+    #     """
+    #     Render the plan
+    #     """
+    #     t_des, x_des = self(init_state, param)
+        
+    #     fig, axs = plt.subplots(self.n_state, 1)
+    #     axs = axs.flatten()  # Flatten in case of more than one row
+        
+    #     # Plot each item in its own subplot
+    #     for i, (k, v) in enumerate(self.state_dict.items()):
+    #         ax = axs[i]
+    #         ax.plot(t_des, x_des[v, :], label=k)
+    #         ax.legend()
+    #         ax.grid(True)
+    #         ax.set_title(k)
+
+    #     if self.render_kwargs["render_online"]:
+    #         plt.show()
+        
+    #     if self.render_kwargs["render_offline"]:
+    #         os.makedirs(self.render_kwargs["save_dir"], exist_ok=True)
+    #         save_path = os.path.join(self.render_kwargs["save_dir"], 
+    #                                  f"plan_s{init_state}_k{param}.png")
+    #         plt.savefig(save_path, format='png')
+    #         plt.close(fig)

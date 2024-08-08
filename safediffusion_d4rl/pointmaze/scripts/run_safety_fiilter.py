@@ -10,7 +10,7 @@ import robomimic
 import safediffusion_d4rl.pointmaze.utils as MazeUtils
 from safediffusion.utils.rand_utils import set_random_seed
 
-from d4rl.pointmaze.maze_model import MEDIUM_MAZE_UNSAFE
+from d4rl.pointmaze.maze_model import MEDIUM_MAZE_UNSAFE, MEDIUM_MAZE
 
 
 # # largemaze + diffusion policy
@@ -22,15 +22,15 @@ POLICY_PATH = os.path.join(robomimic.__path__[0],
                            "../diffusion_policy_trained_models/maze2d_H128/20240704141057/models/model_epoch_700.pth") # policy checkpoint
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 
-                           "../exps/safety_filter/safe_diffusion_maze.json")
+                           "../exps/safety_filter_highvel/safe_diffusion_maze.json")
 
 if __name__ == "__main__":
     # ----------------------------------------- #
     ckpt_path        = POLICY_PATH
     config_json_path = CONFIG_PATH
-    rollout_horizon  = 2000
+    rollout_horizon  = 1000
     render_mode      = "zonotope"
-    seeds            = np.linspace(0, 20, 20).astype(int)
+    seeds            = np.linspace(21, 50, 31).astype(int)
     x0               = np.array([3.2, 5.5, 0.1, 0.0])
     target_pos       = np.array([2.0, 7.0])
     # ----------------------------------------- #

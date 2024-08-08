@@ -55,7 +55,6 @@ class Simple2DPlanner(ParameterizedPlanner):
         # trajectory optimization
         self.opt_dim     = [2, 3]
         self.weight_dict = dict(goal = 0.0, projection = 0.0)
-        self.FRS = None
 
     # ------------------------------------------------------------------------------------------- #
     # --------------------- Define the Planning Model ------------------------------------------- #
@@ -550,9 +549,8 @@ class Simple2DPlanner(ParameterizedPlanner):
         plan, info = super().__call__(obs_dict, goal_dict, random_initialization=random_initialization)
 
         if info["status"] == 0:
-            k_opt = plan.get_trajectory_parameter()
+            k_opt    = plan.get_trajectory_parameter()
             self.FRS = self.get_FRS_from_obs_and_optvar(obs_dict, k_opt[self.opt_dim])
-            self.plan = plan
 
         return plan, info
 
