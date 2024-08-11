@@ -95,8 +95,8 @@ if __name__ == "__main__":
     rand_seeds = np.array(np.random.random(50)*500,dtype=int)
     rand_seeds = [11, 63, 307, 363, 366, 408, 413]
     # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300.pth") # policy checkpoint
-    # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth") # policy checkpoint
-    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300_joint_actions.pth") # policy checkpoint
+    ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_600_joint.pth") # policy checkpoint
+    # ckpt_path = os.path.join(os.path.dirname(__file__), "assets/model_epoch_300_joint_actions.pth") # policy checkpoint
     rollout_horizon = 200
     model_timestep = 1e-3
     ###########################################
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         device = TorchUtils.get_torch_device(try_to_use_cuda=True)
         # restore policy and environment from checkpoint
         policy, ckpt_dict = FileUtils.policy_from_checkpoint(ckpt_path=ckpt_path, device=device, verbose=True)
-        ckpt_dict = overwrite_controller_to_joint_position(ckpt_dict)
+        # ckpt_dict = overwrite_controller_to_joint_position(ckpt_dict)
         ############ Change Environment ##############
         # change the PickPlace environment setting here (Refer to robosuite/PickPlace.py for more details)
         # ckpt_dict["env_metadata"]["env_kwargs"]["single_object_mode"] = 1

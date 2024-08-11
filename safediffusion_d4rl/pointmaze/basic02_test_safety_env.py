@@ -2,11 +2,9 @@
 Test-out the functionality of the safety wrapper of the robomimic environment
 """
 import os
-import json
 import numpy as np
 import imageio
 
-from robomimic.config import config_factory
 from robomimic.envs.env_gym import EnvGym
 
 from safediffusion.utils.file_utils import load_config_from_json

@@ -18,7 +18,7 @@ class MazeEnvSimStatePredictor(StatePredictor):
 
         state_dim  = self.env.get_state()["states"].shape[0]-1
         action_dim = self.env.action_dimension
-        dt  = self.env.sim.model.opt.timestep
+        dt  = self.env.unwrapped_env.sim.model.opt.timestep
 
         super().__init__(state_dim = state_dim, action_dim = action_dim, dt = dt)
 

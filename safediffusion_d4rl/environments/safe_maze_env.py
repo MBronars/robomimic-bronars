@@ -65,7 +65,7 @@ class SafeMazeEnv(ZonotopeEnv):
         """
         robot_zonotope = self.geom_table["zonotope"][self.geom_table["robot"]].values[0]
         world_robotpos = np.array(robot_zonotope.center[:2])
-        body_robotpos  = self.sim.data.qpos
+        body_robotpos  = self.unwrapped_env.sim.data.qpos
 
         offset = world_robotpos - body_robotpos
 

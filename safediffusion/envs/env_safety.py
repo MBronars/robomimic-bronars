@@ -13,7 +13,14 @@ from robomimic.envs.wrappers import EnvWrapper
 
 from safediffusion.utils.env_utils import get_innermost_env
 
-
+class Geom():
+    def __init__(self, name, id):
+        self.name = name
+        self.id   = id
+    
+    def __repr__(self):
+        return self.name
+        
 class SafetyEnv(EB.EnvBase, abc.ABC):
     """
     Wrapper of the environment that employs set-representations for world model
@@ -28,17 +35,18 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
                  **kwargs):
         
         self.env = env
+        self.unwrapped_env = get_innermost_env(self.env)
 
         # get mujoco sim object, supports Envwrapper and Env
-        if isinstance(env, EnvWrapper):
-            self.sim = env.env.env.sim
-        elif isinstance(env, EB.EnvBase):
-            self.sim = env.env.sim
+        # if isinstance(env, EnvWrapper):
+        #     self.sim = env.env.env.sim
+        # elif isinstance(env, EB.EnvBase):
+        #     self.sim = env.env.sim
 
         # safety-related geoms
-        self.robot_geom_names            = self.register_robot_geoms()
-        self.static_obstacle_geom_names  = self.register_static_obstacle_geoms()
-        self.dynamic_obstacle_geom_names = self.register_dynamic_obstacle_geoms()
+        self.robot_geoms                 = self.register_robot_geoms()
+        self.static_obstacle_geoms       = self.register_static_obstacle_geoms()
+        self.dynamic_obstacle_geoms      = self.register_dynamic_obstacle_geoms()
         
         # additional settings
         self.dtype = dtype
@@ -48,7 +56,6 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         self.geom_table                  = self.create_geom_table()
 
         # NOTE: gym.Env is not influenced by the global seeding, so we need to seed the environment manually
-        self.unwrapped_env = get_innermost_env(self.env)
         self.seed_env()
 
     # ---------------------------------------------------------------------------- #
@@ -116,10 +123,10 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         obstacles.extend(self.static_obstacle_geom_names)
         obstacles.extend(self.dynamic_obstacle_geom_names)
 
-        for i in range(self.sim.data.ncon):
-            contact = self.sim.data.contact[i]
-            geom1 = self.sim.model.geom_id2name(contact.geom1)
-            geom2 = self.sim.model.geom_id2name(contact.geom2)
+        for i in range(self.unwrapped_env.sim.data.ncon):
+            contact = self.unwrapped_env.sim.data.contact[i]
+            geom1 = self.unwrapped_env.sim.model.geom_id2name(contact.geom1)
+            geom2 = self.unwrapped_env.sim.model.geom_id2name(contact.geom2)
 
             if (geom1 in self.robot_geom_names and geom2 in obstacles) or \
                (geom2 in self.robot_geom_names and geom1 in obstacles):
@@ -299,92 +306,136 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
 
         This assumes the MuJoCo environment.
         """
-        n_geoms = self.sim.model.ngeom
+        n_geoms = self.unwrapped_env.sim.model.ngeom
         geom_info_dict = dict()
+        
+        robot_geom_ids = [geom.id for geom in self.robot_geoms]
+        static_obs_geom_ids = [geom.id for geom in self.static_obstacle_geoms]
+        dynamic_obs_geom_ids = [geom.id for geom in self.dynamic_obstacle_geoms]
         
         for geom_id in range(n_geoms):
             geom_info_dict[geom_id] = dict()
-            geom_name = self.sim.model.geom_id2name(geom_id)
+            geom_name = self.unwrapped_env.sim.model.geom_id2name(geom_id)
             geom_info_dict[geom_id]["name"]        = geom_name
-            geom_info_dict[geom_id]["type"]        = self.sim.model.geom_type[geom_id]
-            geom_info_dict[geom_id]["body_id"]     = self.sim.model.geom_bodyid[geom_id]
-            geom_info_dict[geom_id]["robot"]       = geom_name in self.robot_geom_names
-            geom_info_dict[geom_id]["static_obs"]  = geom_name in self.static_obstacle_geom_names
-            geom_info_dict[geom_id]["dynamic_obs"] = geom_name in self.dynamic_obstacle_geom_names
+            geom_info_dict[geom_id]["type"]        = self.unwrapped_env.sim.model.geom_type[geom_id]
+            geom_info_dict[geom_id]["body_id"]     = self.unwrapped_env.sim.model.geom_bodyid[geom_id]
+            geom_info_dict[geom_id]["robot"]       = geom_id in robot_geom_ids
+            geom_info_dict[geom_id]["static_obs"]  = geom_id in static_obs_geom_ids
+            geom_info_dict[geom_id]["dynamic_obs"] = geom_id in dynamic_obs_geom_ids
         
         df = pd.DataFrame.from_dict(geom_info_dict, orient='index')
 
         return df
     
-    def get_geom_name_of_body_name(self, body_names):
+    def get_geom_that_body_name_is_in(self, body_names):
         """
-        Get the geometry names of the list of given body names.
+        Get the list of geometry of which body has name in the given list of body names.
 
         Args:
             body_names (list): list of body names
         
         Returns:
-            geom_names_of_body (list): list of geometry names that are related to the body names
+            geoms (list): list of geometry names that are related to the body names
         """
         # Argument handling
         if isinstance(body_names, str):
             body_names = [body_names]
+
+        mjmodel = self.unwrapped_env.sim.model
         
-        geom_names = []
+        geoms = [Geom(id = gid, name = mjmodel.geom_id2name(gid))
+                for (gid, bid) in enumerate(mjmodel.geom_bodyid)
+                for body_name in body_names 
+                if bid == mjmodel.body_name2id(body_name)]
+        
+        return geoms
 
-        for body_name in body_names:
-            body_id = self.sim.model.body_name2id(body_name)
-
-            geom_names_iter = [self.sim.model.geom_id2name(gid) 
-                                for (gid, bid) in enumerate(self.sim.model.geom_bodyid) 
-                                if bid == body_id]
-            
-            geom_names.extend(geom_names_iter)
-
-        return geom_names
-    
-    def get_geom_name_starts_with(self, prefix_list):
+    def get_geom_that_body_name_starts_with(self, prefix_list):
         """
-        Get the geometry names that start with the given prefix.
+        Get the geometry that body name start with the given prefix.
         
         Args:
             prefix_list (list): list of prefixes
         Returns:
-            geom_names (list): list of geometry names that start with the given prefix
+            geoms (list): list of geometries whose body name start with the given prefix
+        """
+        if isinstance(prefix_list, str):
+            prefix_list = [prefix_list]
+
+        mjmodel = self.unwrapped_env.sim.model
+        body_names = [body_name
+                      for body_name in mjmodel.body_names
+                      for prefix in prefix_list
+                      if body_name.startswith(prefix)]
+        
+        return self.get_geom_that_body_name_is_in(body_names)
+    
+    def get_geom_that_body_name_ends_with(self, postfix_list):
+        """
+        Get the geometry that body name ends with the given postfix.
+        
+        Args:
+            postfix_list (list): list of postfixes
+
+        Returns:
+            geoms (list): list of geometry names that start with the given postfix
+        """
+        if isinstance(postfix_list, str):
+            postfix_list = [postfix_list]
+
+        mjmodel = self.unwrapped_env.sim.model
+
+        body_names = [body_name
+                      for body_name in mjmodel.body_names
+                      for postfix in postfix_list
+                      if body_name.endswith(postfix)]
+        
+        return self.get_geom_that_body_name_is_in(body_names)
+    
+    def get_geom_that_name_starts_with(self, prefix_list):
+        """
+        Get the list of geometry of which name that start with the given prefix.
+        
+        Args:
+            prefix_list (list): list of prefixes
+        Returns:
+            geom (list): list of geometry (Geom) of which name starts with the given prefix
         """
 
         if isinstance(prefix_list, str):
             prefix_list = [prefix_list]
-  
-        geom_names = []
-
-        for prefix in prefix_list:
-            geom_names_iter = [name 
-                               for name in self.sim.model.geom_names 
-                               if name.startswith(prefix)]
-            geom_names.extend(geom_names_iter)
         
-        return geom_names
+        # pointer to the MuJoCo model
+        mjmodel = self.unwrapped_env.sim.model
+
+        geoms = [
+            Geom(id=id, name=name)
+            for id in range(mjmodel.ngeom)
+            if (name := mjmodel.geom_id2name(id)) is not None and name.startswith(tuple(prefix_list))
+        ]
+        
+        return geoms
     
     def get_geom_name_ends_with(self, postfix_list):
         """
-        Get the geometry names that ends with the given postfix.
+        Get the list of geometry of which name ends with the given postfix.
         
         Args:
             postfix (list): list of postfixes
         Returns:
-            geom_names (list): list of geometry names that ends with the given postfix
+            geom (list): list of geometry (Geom) of which name ends with the given postfix
         """
 
         if isinstance(postfix_list, str):
             postfix_list = [postfix_list]
         
-        geom_names = []
+        # pointer to the MuJoCo model
+        mjmodel = self.unwrapped_env.sim.model
 
-        for postfix in postfix_list:
-            geom_names_iter = [name 
-                               for name in self.sim.model.geom_names 
-                               if name.endswith(postfix)]
-            geom_names.extend(geom_names_iter)
+        geoms = [
+            Geom(id=id, name=name)
+            for id in range(mjmodel.ngeom)
+            if (name := mjmodel.geom_id2name(id)) is not None and name.endswith(tuple(postfix_list))
+        ]
         
-        return geom_names
+        return geoms

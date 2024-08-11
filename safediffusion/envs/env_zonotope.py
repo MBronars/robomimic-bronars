@@ -126,7 +126,7 @@ class ZonotopeEnv(SafetyEnv):
         Returns:
             ZP (zonotope): zonotope of the geom
         """
-        geom_id = self.sim.model.geom_name2id(geom_name)
+        geom_id = self.unwrapped_env.sim.model.geom_name2id(geom_name)
         return self.get_zonotope_from_geom_id(geom_id)
 
     def get_zonotope_from_geom_id(self, geom_id):
@@ -144,10 +144,10 @@ class ZonotopeEnv(SafetyEnv):
         NOTE: Currently supports only Plane, Sphere, Cylinder, Box
         TODO: Support more geom types: 1) MESH, 2) CAPSULE, 3) ELLIPSOID, 4) HFIELD, 5) SDF
         """
-        geom_type = self.sim.model.geom_type[geom_id]
-        geom_pos = self.sim.data.geom_xpos[geom_id]
-        geom_rot = self.sim.data.geom_xmat[geom_id].reshape(3, 3)
-        geom_size = self.sim.model.geom_size[geom_id]
+        geom_type = self.unwrapped_env.sim.model.geom_type[geom_id]
+        geom_pos = self.unwrapped_env.sim.data.geom_xpos[geom_id]
+        geom_rot = self.unwrapped_env.sim.data.geom_xmat[geom_id].reshape(3, 3)
+        geom_size = self.unwrapped_env.sim.model.geom_size[geom_id]
 
         # Get Zonotope Primitive (ZP)
         if geom_type == GeomType.PLANE.value:

@@ -249,8 +249,8 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                            verbose          = True)
     
     # wrap the environment with the safety wrapper
-    env_safe      = SafeMazeEnv(env, **config.safety)
-    dt_action = env_safe.sim.model.opt.timestep
+    env_safe  = SafeMazeEnv(env, **config.safety)
+    dt_action = env_safe.unwrapped_env.sim.model.opt.timestep
 
     
     # wrap the policy that needs 1) state predictor and 2) backup_policy
