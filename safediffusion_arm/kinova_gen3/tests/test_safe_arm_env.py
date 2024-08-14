@@ -37,7 +37,8 @@ def test_zonotope_env(policy, env, horizon, seed, save_dir):
                                         horizon  = horizon,
                                         seed     = seed,
                                         save_dir = save_dir,
-                                        render_mode = "zonotope"
+                                        render_mode = "zonotope",
+                                        video_skip = 5
                                         )
 
 def test_rollout(env, policy):
