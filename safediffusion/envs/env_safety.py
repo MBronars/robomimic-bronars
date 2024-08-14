@@ -37,12 +37,6 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         self.env = env
         self.unwrapped_env = get_innermost_env(self.env)
 
-        # get mujoco sim object, supports Envwrapper and Env
-        # if isinstance(env, EnvWrapper):
-        #     self.sim = env.env.env.sim
-        # elif isinstance(env, EB.EnvBase):
-        #     self.sim = env.env.sim
-
         # safety-related geoms
         self.robot_geoms                 = self.register_robot_geoms()
         self.static_obstacle_geoms       = self.register_static_obstacle_geoms()
@@ -119,17 +113,17 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
         raise NotImplementedError
     
     def collision(self):
-        obstacles = []
-        obstacles.extend(self.static_obstacle_geom_names)
-        obstacles.extend(self.dynamic_obstacle_geom_names)
-
+        obstacle_geom_id = {geom.id for geom in self.static_obstacle_geoms}.union(
+                            {geom.id for geom in self.dynamic_obstacle_geoms}
+                            )
+        
+        robot_geom_id = {geom.id for geom in self.robot_geoms}
+        
         for i in range(self.unwrapped_env.sim.data.ncon):
             contact = self.unwrapped_env.sim.data.contact[i]
-            geom1 = self.unwrapped_env.sim.model.geom_id2name(contact.geom1)
-            geom2 = self.unwrapped_env.sim.model.geom_id2name(contact.geom2)
 
-            if (geom1 in self.robot_geom_names and geom2 in obstacles) or \
-               (geom2 in self.robot_geom_names and geom1 in obstacles):
+            if (contact.geom1 in robot_geom_id and contact.geom2 in obstacle_geom_id) or \
+               (contact.geom2 in robot_geom_id and contact.geom1 in obstacle_geom_id):
                 return True
             
         return False

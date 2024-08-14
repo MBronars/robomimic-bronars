@@ -2,7 +2,6 @@
 Testing-out the functionality of the backup policy
 """
 import os
-import json
 import numpy as np
 import imageio
 
@@ -49,10 +48,10 @@ def test(env, policy, x0, target_pos, save_dir = None, render_mode = None):
         plan, info = policy(obs, goal)
         plan_ws = plan.x_des + env.robotqpos_to_worldpos
 
-        t_plan_start = env.sim.data.time
+        t_plan_start = env.unwrapped_env.sim.data.time
         # HACK
         for i in range(n_step_per_plan):
-            t = env.sim.data.time - t_plan_start
+            t = env.unwrapped_env.sim.data.time - t_plan_start
             state = obs["flat"]
             state[:2] = state[:2] + env.robotqpos_to_worldpos
 

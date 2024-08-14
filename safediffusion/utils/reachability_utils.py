@@ -166,6 +166,22 @@ def get_zonotope_from_sphere_geom(pos, rot, size):
 
     return zonotope(Z)
 
+def get_zonotope_from_mesh_vertices(vertices):
+    """
+    Create zonotope that represents the bounding box of mesh ver
+    """
+
+    min_coords = np.min(vertices, axis=0)
+    max_coords = np.max(vertices, axis=0)
+
+    c = (max_coords + min_coords)/2
+    G = np.diag((max_coords - min_coords)/2)
+    Z = np.vstack([c, G])
+    Z = torch.asarray(Z)
+
+    return zonotope(Z)
+
+
 def get_zonotope_from_segment(x1, x2):
     """
     Create zonotope that represents the line segment between x1 and x2

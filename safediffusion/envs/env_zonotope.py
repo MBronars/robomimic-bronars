@@ -97,9 +97,11 @@ class ZonotopeEnv(SafetyEnv):
         """
         Add the zonotope column that stores the zonotopic representation of the geometry
         """
-        geom_table             = super().create_geom_table()
-        geom_table["zonotope"] = [self.get_zonotope_from_geom_id(geom_id) 
-                                       for geom_id in geom_table.index]
+        geom_table                       = super().create_geom_table()
+        geom_table["zonotope_primitive"] = [self.get_zonotope_primitive_from_geom_id(geom_id) 
+                                                for geom_id in geom_table.index]
+        geom_table["zonotope"]           = [self.get_zonotope_from_geom_id(geom_id) 
+                                                for geom_id in geom_table.index]
         
         return geom_table
     
@@ -110,10 +112,15 @@ class ZonotopeEnv(SafetyEnv):
         """
         Update the zonotope of the robot and dynamic obstacles
         """
+        mjdata = self.unwrapped_env.sim.data
         robot_mask = self.geom_table["robot"]
         dynamic_obs_mask = self.geom_table["dynamic_obs"]
         update_mask = robot_mask | dynamic_obs_mask
-        self.geom_table.loc[update_mask, "zonotope"] = [self.get_zonotope_from_geom_id(geom_id) 
+        self.geom_table.loc[update_mask, "zonotope"] = [reach_utils.transform_zonotope(
+                                                            zono = self.geom_table["zonotope_primitive"][geom_id],
+                                                            pos  = mjdata.geom_xpos[geom_id],
+                                                            rot  = mjdata.geom_xmat[geom_id].reshape(3, 3)
+                                                        ) 
                                                         for geom_id in self.geom_table.loc[update_mask].index]
 
     def get_zonotope_from_geom_name(self, geom_name):
@@ -129,45 +136,121 @@ class ZonotopeEnv(SafetyEnv):
         geom_id = self.unwrapped_env.sim.model.geom_name2id(geom_name)
         return self.get_zonotope_from_geom_id(geom_id)
 
-    def get_zonotope_from_geom_id(self, geom_id):
+    def get_zonotope_primitive_from_geom_id(self, geom_id):
         """
-        Get the zonotope from the geom_id.
+        Get the zonotope primitive of the geometry given `geom_id`
 
-        This assumes the sim.forward is called before calling this function so that geom_xpos, geom_xmat, geom_size are updated.
+        This zonotope does not depend on the current pos/rot of the geometry
 
-        Args:
-            geom_id (int): id of the geom
+        Args
+            geom_id (int): id of the geometry
         
-        Returns:
-            ZP (zonotope): zonotope of the geom
-
-        NOTE: Currently supports only Plane, Sphere, Cylinder, Box
-        TODO: Support more geom types: 1) MESH, 2) CAPSULE, 3) ELLIPSOID, 4) HFIELD, 5) SDF
+        Returns
+            zonotope_primitive (zonotope)
         """
-        geom_type = self.unwrapped_env.sim.model.geom_type[geom_id]
-        geom_pos = self.unwrapped_env.sim.data.geom_xpos[geom_id]
-        geom_rot = self.unwrapped_env.sim.data.geom_xmat[geom_id].reshape(3, 3)
-        geom_size = self.unwrapped_env.sim.model.geom_size[geom_id]
+
+        mjmodel = self.unwrapped_env.sim.model
+
+        geom_type = mjmodel.geom_type[geom_id]
+        geom_size = mjmodel.geom_size[geom_id]
+
+        zero = torch.zeros(3,)
+        eye  = torch.eye(3)
 
         # Get Zonotope Primitive (ZP)
         if geom_type == GeomType.PLANE.value:
-            ZP = reach_utils.get_zonotope_from_plane_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+            ZP = reach_utils.get_zonotope_from_plane_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.SPHERE.value:
-            ZP = reach_utils.get_zonotope_from_sphere_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+            ZP = reach_utils.get_zonotope_from_sphere_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.CYLINDER.value:
-            ZP = reach_utils.get_zonotope_from_cylinder_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+            ZP = reach_utils.get_zonotope_from_cylinder_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.BOX.value:
-            ZP = reach_utils.get_zonotope_from_box_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+            ZP = reach_utils.get_zonotope_from_box_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.MESH.value:
-            ZP = None
+            mesh_id = mjmodel.geom_dataid[geom_id]
+            vert_start = mjmodel.mesh_vertadr[mesh_id]
+            vert_count = mjmodel.mesh_vertnum[mesh_id]
+            vertices = mjmodel.mesh_vert[vert_start:vert_start + vert_count].reshape(-1, 3)
+            ZP = reach_utils.get_zonotope_from_mesh_vertices(vertices=vertices)
         else:
             print(f"Geom type {geom_type} is not supported yet.")
             raise NotImplementedError("Not Implemented")
-        
+
         if ZP is not None:
             ZP = ZP.to(device=self.device, dtype=self.dtype)
-
+        
         return ZP
+    
+    def get_zonotope_from_geom_id(self, geom_id):
+        """
+        Get the zonotope given the simulation data
+        """
+
+        mjdata = self.unwrapped_env.sim.data
+        
+        ZP = self.get_zonotope_primitive_from_geom_id(geom_id)
+
+        geom_pos = mjdata.geom_xpos[geom_id]
+        geom_rot = mjdata.geom_xmat[geom_id].reshape(3, 3)
+
+        Z = reach_utils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
+
+        return Z
+
+    # TODO: start from here. replace get_zonotope_from_geom_id, refactor reach_utils
+
+
+    
+    # def get_zonotope_from_geom_id(self, geom_id):
+    #     """
+    #     Get the zonotope from the geom_id.
+
+    #     This assumes the sim.forward is called before calling this function so that geom_xpos, geom_xmat, geom_size are updated.
+
+    #     Args:
+    #         geom_id (int): id of the geom
+        
+    #     Returns:
+    #         ZP (zonotope): zonotope of the geom
+
+    #     NOTE: Currently supports only Plane, Sphere, Cylinder, Box
+    #     TODO: Support more geom types: 1) MESH, 2) CAPSULE, 3) ELLIPSOID, 4) HFIELD, 5) SDF
+    #     """
+    #     mjmodel = self.unwrapped_env.sim.model
+    #     mjdata  = self.unwrapped_env.sim.data
+        
+    #     geom_type = mjmodel.geom_type[geom_id]
+    #     geom_size = mjmodel.geom_size[geom_id]
+
+    #     geom_pos = mjdata.geom_xpos[geom_id]
+    #     geom_rot = mjdata.geom_xmat[geom_id].reshape(3, 3)
+        
+    #     # Get Zonotope Primitive (ZP)
+    #     if geom_type == GeomType.PLANE.value:
+    #         ZP = reach_utils.get_zonotope_from_plane_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #     elif geom_type == GeomType.SPHERE.value:
+    #         ZP = reach_utils.get_zonotope_from_sphere_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #     elif geom_type == GeomType.CYLINDER.value:
+    #         ZP = reach_utils.get_zonotope_from_cylinder_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #     elif geom_type == GeomType.BOX.value:
+    #         ZP = reach_utils.get_zonotope_from_box_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #     elif geom_type == GeomType.MESH.value:
+    #         mesh_id = mjmodel.geom_dataid[geom_id]
+    #         vert_start = mjmodel.mesh_vertadr[mesh_id]
+    #         vert_count = mjmodel.mesh_vertnum[mesh_id]
+    #         vertices = mjmodel.mesh_vert[vert_start:vert_start + vert_count].reshape(-1, 3)
+    #         ZP = reach_utils.get_zonotope_from_mesh_vertices(vertices=vertices)
+
+    #         # TODO: register ZP only and transform to get the representation
+    #         # ZP = reach_utils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
+    #     else:
+    #         print(f"Geom type {geom_type} is not supported yet.")
+    #         raise NotImplementedError("Not Implemented")
+        
+    #     if ZP is not None:
+    #         ZP = ZP.to(device=self.device, dtype=self.dtype)
+
+    #     return ZP
 
     # ------------------------------------------------------------ #
     # ----------------- Renderer-related functions --------------- #
@@ -282,7 +365,7 @@ class ZonotopeEnv(SafetyEnv):
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
 
-    def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
+    def custom_render(self, mode=None, height=None, width=None, camera_name="agentview", **kwargs):
         """Renders the environment as 3D zonotope world.
 
         Args:
@@ -353,6 +436,8 @@ class ZonotopeEnv(SafetyEnv):
                                                          self.render_setting["goal"]["color"], 
                                                          self.render_setting["goal"]["alpha"], 
                                                          self.render_setting["goal"]["linewidth"])
+        
+        self.adjust_camera(camera_name)
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -366,3 +451,13 @@ class ZonotopeEnv(SafetyEnv):
             img = self.add_circle(img, color = (0, 0, 255)) # if not intervened, add blue circle
 
         return img
+
+    def adjust_camera(self, camera_name):
+        if camera_name == "agentview":
+            self.ax.view_init(elev=30, azim=30)
+        elif camera_name == "frontview":
+            self.ax.view_init(elev=5, azim=0)
+        elif camera_name == "topview":
+            self.ax.view_init(elev=90, azim=0)
+        else:
+            raise NotImplementedError

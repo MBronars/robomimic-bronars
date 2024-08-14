@@ -13,8 +13,6 @@ import matplotlib.pyplot as plt
 from safediffusion.algo.plan import ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.algo.helper import traj_uniform_acc
-from safediffusion.utils.reachability_utils import get_zonotope_from_segment
-from safediffusion.algo.helper import match_trajectories
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -564,9 +562,6 @@ class Simple2DPlanner(ParameterizedPlanner):
         FRS = FRS.slice_all_dep(k_opt)
         
         return FRS
-        
-    def generate_combinations_upto(self, max_combs):
-        return [torch.combinations(torch.arange(i), 2) for i in range(max_combs+1)]
     
     def test_forward_occupancy(self, FO, pos_0, vel_0, acc_0):
         """

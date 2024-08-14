@@ -24,7 +24,7 @@ from safediffusion.envs.env_safearm import ZonotopeMuJoCoEnv
 from safediffusion.safety_filter.base import SafetyFilter
 from safediffusion.utils.file_utils import RESULT_DIR
 
-def overwrite_controller_to_joint_position(ckpt_fdict):
+def overwrite_controller_to_joint_position(ckpt_dict):
     ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
         "type": "JOINT_POSITION",
         "input_max": 1,

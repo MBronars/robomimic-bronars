@@ -131,7 +131,7 @@ class SafeArmEnv(ZonotopeEnv):
         """ Postprocess observation        
         """
         obs = super().get_observation(obs)
-        
+
         return obs
     
     def reset(self):
@@ -192,9 +192,10 @@ class SafePickPlaceEnv(SafeArmEnv):
         """
         init_active_object_id: the id of initial object to grasp
         """
-        super().__init__(env, **kwargs)
 
-        self.active_object = init_active_object
+        self.active_object    = init_active_object
+        
+        super().__init__(env, **kwargs)
 
         self.gripper_innerpad_geoms = []
         self.gripper_innerpad_geoms.extend(self.unwrapped_env.robots[0].gripper.important_geoms["left_fingerpad"])
@@ -206,6 +207,27 @@ class SafePickPlaceEnv(SafeArmEnv):
                                             "gripper0_left_inner_finger_collision",
                                             "gripper0_left_fingertip_collision"
                                         ])
+        
+        # Render settings
+        self.patches["active_object"] = None
+
+    def get_observation(self, obs=None):
+        """
+        PickPlace 
+        """
+        obs = super().get_observation(obs)
+
+        # add the transform between the world to the robot base
+        mjdata = self.unwrapped_env.sim.data
+        T_world_to_base           = np.zeros((4, 4))
+        T_world_to_base[0:3, 0:3] = mjdata.get_body_xmat("robot0_base")
+        T_world_to_base[0:3, 3]   = mjdata.get_body_xpos("robot0_base")
+        T_world_to_base[3, 3]     = 1
+
+        obs["T_world_to_base"]    = T_world_to_base 
+
+        return obs
+
     
     def is_safe(self):
         """
@@ -291,7 +313,7 @@ class SafePickPlaceEnv(SafeArmEnv):
                     break
                 
         return is_safe_now
-    
+        
     def dist_from_gripper_to_obj(self, obj):
         """
         Return the distance from the gripper to the object
@@ -360,6 +382,56 @@ class SafePickPlaceEnv(SafeArmEnv):
                                                 object_geoms=active_object.contact_geoms
                                             )
         return is_grasping
+    
+    def create_geom_table(self):
+        """
+        Create useful geometry table
+
+        For SafePickPlaceEnv, we add the "active_object" column that identifies the geometry
+        that belongs to the active object
+        """
+        geom_table = super().create_geom_table()
+
+        active_object_id   = self.unwrapped_env.object_to_id[self.active_object.lower()]
+        active_object_name = self.unwrapped_env.obj_names[active_object_id]
+        active_geom_id     = self.unwrapped_env.obj_geom_id[active_object_name]
+        
+        geom_table['active_object'] = geom_table.index.isin(active_geom_id)
+
+        return geom_table
+
+    def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
+        if self.fig is None:
+            self.initialize_renderer()
+
+        # dynamic zonotopes
+        self.draw_zonotopes_in_geom_table("dynamic_obs", remove_if_exists=True)
+        self.draw_zonotopes_in_geom_table("robot", remove_if_exists=True)
+        self.draw_zonotopes_in_geom_table("active_object", remove_if_exists=True)
+
+        # camera view
+        if camera_name == "agentview":
+            self.ax.view_init(elev=30, azim=30)
+        elif camera_name == "frontview":
+            self.ax.view_init(elev=5, azim=0)
+        elif camera_name == "topview":
+            self.ax.view_init(elev=90, azim=0)
+        else:
+            raise NotImplementedError
+
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+
+        img = np.frombuffer(self.fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img = img.reshape(self.fig.canvas.get_width_height()[::-1] + (3,))
+
+        if "intervened" in kwargs.keys() and kwargs["intervened"]:
+            img = self.add_circle(img, color = (0, 255, 0)) # if intervened, add green circle
+        else:
+            img = self.add_circle(img, color = (0, 0, 255)) # if not intervened, add blue circle
+
+        return img
+
 
 class SafePickPlaceBreadEnv(SafePickPlaceEnv):
     """

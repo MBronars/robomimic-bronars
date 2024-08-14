@@ -92,14 +92,14 @@ class SafeMazeEnv(ZonotopeEnv):
         """
         robot_body_names = ["particle"]
         
-        return self.get_geom_name_of_body_name(robot_body_names)
+        return self.get_geom_that_body_name_is_in(robot_body_names)
     
     def register_static_obstacle_geoms(self):
         """ Register the geometry that is considered dangerous
         """
         static_obs_prefix = ["wall"]
 
-        return self.get_geom_name_starts_with(static_obs_prefix)
+        return self.get_geom_that_name_starts_with(static_obs_prefix)
     
     def register_dynamic_obstacle_geoms(self):
         """ Register the geometry that is considered dangerous
@@ -250,7 +250,7 @@ class SafeMazeEnv(ZonotopeEnv):
         self.ax.set_xlim([min_V[0] - 0.1, max_V[0] + 0.1])
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
 
-    def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
+    def custom_render(self, mode=None, height=None, width=None, camera_name="agentview", **kwargs):
         """Renders the environment.
 
         Args:
@@ -267,4 +267,10 @@ class SafeMazeEnv(ZonotopeEnv):
             img = self.janner_renderer.render(self.get_observation()["flat"], **kwargs)
         
         return img
+    
+    def adjust_camera(self, camera_name):
+        """
+        For Maze2D env, ignore this
+        """
+        pass
 

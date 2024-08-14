@@ -73,6 +73,7 @@ class Arm_3D:
         self.dof = self.n_links = params['n_joints']
         self.joint_id = torch.arange(self.n_links,dtype=int,device=device)
         self.__link_zonos = [(self.scale*params['link_zonos'][j]).to(dtype=dtype,device=device) for j in range(self.n_links)] # NOTE: zonotope, should it be poly zonotope?
+        self._link_zonos = [(self.scale*params['link_zonos'][j]).to(dtype=dtype,device=device) for j in range(self.n_links)] # NOTE: zonotope, should it be poly zonotope?
         self.link_polyhedron = [zono.polyhedron_patch() for zono in self.__link_zonos]
         self.link_zonos = [self.__link_zonos[j].to_polyZonotope() for j in range(self.n_links)]
         self.P0 = [self.scale*P.to(dtype=dtype,device=device) for P in params['P']]

@@ -11,6 +11,10 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         self.lock_keys()
 
     def safety_config(self):
+        # zonotope configuration
+        self.safety.zonotope.order    = 40
+        self.safety.zonotope.max_comb = 200
+
         # safety-filter configuration
         self.safety.filter.n_head = 1
         self.safety.filter.verbose = True
@@ -29,6 +33,10 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         self.safety.render.zonotope.robot.color = "black"
         self.safety.render.zonotope.robot.alpha = 0.1
         self.safety.render.zonotope.robot.linewidth = 0.5
+
+        self.safety.render.zonotope.active_object.color = "yellow"
+        self.safety.render.zonotope.active_object.alpha = 1
+        self.safety.render.zonotope.active_object.linewidth = 0.1
 
         self.safety.render.zonotope.goal.color = "purple"
         self.safety.render.zonotope.goal.alpha = 0.3

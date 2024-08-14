@@ -268,8 +268,14 @@ class IdentityDiffusionPolicyMaze(SafeDiffusionPolicyMaze):
         
         info["backup_plan"].stamp_trajectory_parameter(torch.zeros(4,))
         
-
         return info
+
+class IdentityBackupPolicyMaze(SafeDiffusionPolicyMaze):
+    def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
+        info = dict()
+        info["head_plan"] = False
+        
+        info["backup_plan"]
     
 class SafeDiffuserMaze(SafeDiffusionPolicyMaze):
     def __init__(self, rollout_policy, backup_policy, dt_action, predictor, **config):

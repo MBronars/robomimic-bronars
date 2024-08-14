@@ -160,7 +160,7 @@ class ParameterizedPlanner(abc.ABC):
         raise NotImplementedError
     
     @abc.abstractmethod
-    def _prepare_problem_data(self, obs_dict, goal_dict):
+    def _prepare_problem_data(self, obs_dict, goal_dict, random_initialization = False):
         """
         Setup the useful variables for the trajectory optimization
         """
@@ -353,6 +353,9 @@ class ParameterizedPlanner(abc.ABC):
 
     def disp(self, msg):
         print(f"[{self.__class__.__name__}]:        {msg}")
+    
+    def generate_combinations_upto(self, max_combs):
+        return [torch.combinations(torch.arange(i), 2) for i in range(max_combs+1)]
 
     @property
     def n_state(self):
