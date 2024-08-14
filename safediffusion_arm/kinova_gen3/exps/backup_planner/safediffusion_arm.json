@@ -5,7 +5,7 @@
             "n_head": 10
         },
         "render":{
-            "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/basic/",
+            "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/backup_planner/",
             "zonotope":{
                 "robot":{
                     "color": "black",

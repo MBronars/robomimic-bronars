@@ -3,7 +3,6 @@ import os
 # robomimic
 import robomimic
 
-from robomimic.envs.env_robosuite import EnvRobosuite
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.file_utils as FileUtils
 from safediffusion.utils.file_utils import load_config_from_json
@@ -21,23 +20,26 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__),
 def test_safety_env(policy, env, horizon, seed, save_dir):
     """ Write the testing script
     """
-    stats = KinovaUtils.rollout_with_seed(policy   = policy,
-                                        env      = env,
-                                        horizon  = horizon,
-                                        seed     = seed,
-                                        save_dir = save_dir,
-                                        video_skip = 3,
+    stats = KinovaUtils.rollout_with_seed(policy     = policy,
+                                        env          = env,
+                                        horizon      = horizon,
+                                        seed         = seed,
+                                        save_dir     = save_dir,
+                                        video_skip   = 3,
+                                        camera_names = ["robot0_eye_in_hand", "agentview"]
                                         )
 
 def test_zonotope_env(policy, env, horizon, seed, save_dir):
     """ Write the testing script
     """
-    stats = KinovaUtils.rollout_with_seed(policy   = policy,
-                                        env      = env,
-                                        horizon  = horizon,
-                                        seed     = seed,
-                                        save_dir = save_dir,
-                                        render_mode = "zonotope"
+    stats = KinovaUtils.rollout_with_seed(policy    = policy,
+                                        env         = env,
+                                        horizon     = horizon,
+                                        seed        = seed,
+                                        save_dir    = save_dir,
+                                        render_mode = "zonotope",
+                                        video_skip  = 5,
+                                        camera_names = ["frontview", "agentview"]
                                         )
 
 def test_rollout(env, policy):
@@ -57,7 +59,7 @@ if __name__ == "__main__":
     ckpt_path            = POLICY_PATH
     config_json_filename = CONFIG_PATH
     horizon              = 500
-    seed                 = 63
+    seed                 = 35
     # ----------------------------------- #
 
     # robomimic-style loading policy
@@ -79,9 +81,15 @@ if __name__ == "__main__":
     # maybe override the policy and environment here, see pointmaze/utils.py
 
     # TODO: make the 
-    env   = SafePickPlaceBreadEnv(env, init_active_object_id=1, **config.safety)
+    env   = SafePickPlaceBreadEnv(env, **config.safety)
 
-    test_safety_env(policy   = policy,
+    # test_safety_env(policy   = policy,
+    #                 env      = env,
+    #                 horizon  = horizon,
+    #                 seed     = seed,
+    #                 save_dir = config.safety.render.save_dir)
+
+    test_zonotope_env(policy   = policy,
                     env      = env,
                     horizon  = horizon,
                     seed     = seed,
