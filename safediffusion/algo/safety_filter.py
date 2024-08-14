@@ -21,7 +21,10 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
 
     TODO: Think of how to load dtype and device wisely
     """
-    def __init__(self, rollout_policy, backup_policy, dt_action,
+    def __init__(self, 
+                 rollout_policy, 
+                 backup_policy, 
+                 dt_action,
                  dtype  = torch.float32,
                  device = torch.device("cpu"),
                 **config):
@@ -207,6 +210,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
     def update_backup_policy_weight(self):
         """
         Update the weight dictionary of the backup policy according to the internal status.
+        This function reflects the strategy of the objective of the backup planner.
         """
         raise NotImplementedError
 
@@ -253,6 +257,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
 
         Args
             reference_traj : (B, 1) ReferenceTrajectory array
+            ob             : dict, observation dictionary from the environment
         
         Returns
             actions : (B, T_p, D_a) np.ndarray

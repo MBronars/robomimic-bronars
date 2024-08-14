@@ -94,5 +94,3 @@ if __name__ == "__main__":
                     horizon  = horizon,
                     seed     = seed,
                     save_dir = config.safety.render.save_dir)
-
-    # test_safety_env(env_safearm)

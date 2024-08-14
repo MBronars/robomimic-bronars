@@ -29,10 +29,10 @@ class ArmtdPlanner(ParameterizedPlanner):
     """
     Armtd-style of planner for the manipulator robot
     """
-    def __init__(self, robot_name="Kinova3", **kwargs):
-        
+    def __init__(self, LLC, robot_name="Kinova3", **kwargs):
         # prepare the useful variables for robot configuration, joint limits, reachable sets
         self.dimension  = 3
+        self.LLC        = LLC # low-level controller
 
         # load robot configuration
         self.robot_name = robot_name
@@ -562,10 +562,49 @@ class ArmtdPlanner(ParameterizedPlanner):
     # Helper
     # ---------------------------------------------- #
 
-    def wrap_cont_joint_to_pi(self,phases):
+    def wrap_cont_joint_to_pi(self, phases):
         if len(phases.shape) == 1:
             phases = phases.unsqueeze(0)
         phases_new = torch.clone(phases)
         phases_new[:,~self.lim_flag] = (phases[:,~self.lim_flag] + torch.pi) % (2 * torch.pi) - torch.pi
         return phases_new 
     
+    def track_reference_traj(self, obs_dict, reference_traj):
+        """
+        Return the actions that can be sent to the environment.
+
+        Action representation for the robomimic joint angle controller is the delta joint angle.
+
+        Args:
+            ob  : (dict), observation dictionary from the environment
+            plan: (ReferenceTrajectory): joint angle reference trajectories
+        """
+        
+        qpos_curr      = np.array(self.get_pstate_from_obs(obs_dict = obs_dict))
+
+        # compensate for the initial lag
+        delta_qpos     = np.array(reference_traj.x_des[1:] - reference_traj.x_des[:-1])
+        delta_qpos[0] += reference_traj.x_des[0] - qpos_curr
+        actions        = delta_qpos
+        actions        = np.clip(actions, self.LLC.output_min, self.LLC.output_max)
+
+
+
+
+
+
+
+
+
+
+        offset  = np.array(reference_traj.x_des[0] - qpos) # if initial planning state is not the same as the current state
+        actions = np.array(reference_traj.x_des[1:] - reference_traj.x_des[:-1]) + offset
+        if ((actions.max(0) > self.LLC.output_max) | (actions.min(0) < self.LLC.output_min)).any():
+            self.disp("Actions are out of range: joint goal position gets different with the plan", self.verbose)
+
+        actions = np.clip(actions, self.LLC.output_min, self.LLC.output_max)
+        actions = scale_array_from_A_to_B(actions, A=[self.LLC.output_min, self.LLC.output_max], B=[self.LLC.input_min, self.LLC.input_max]) # (T, D) array
+        actions = np.clip(actions, self.LLC.input_min, self.LLC.input_max)
+        assert(np.all(actions >= self.LLC.input_min) and np.all(actions <= self.LLC.input_max)), "Actions are out of range"
+
+        return actions
