@@ -16,13 +16,33 @@ class ArmEnvSimStatePredictor(StatePredictor):
         self.env = env
         self.env.reset()
 
-        state_dim  = self.env.get_state()["states"].shape[0]-1
+        state_dim  = self.env.get_state()["states"].shape[0] # this includes the time dimension
         action_dim = self.env.action_dimension
-        dt  = self.env.unwrapped_env.sim.model.opt.timestep
+        dt         = 1/self.env.unwrapped_env.control_freq
 
         super().__init__(state_dim = state_dim, action_dim = action_dim, dt = dt)
 
     def __call__(self, x0, actions):
+        """
+        state_dict \in \R^79 = 1 + 2*13 + 28
+            [time                  \R^1, 
+             robot_joint_pos       \R^7,
+             robot_gripper_qpos    \R^6
+             object1_(qpos, qquat) \R^7
+             object2_(qpos, qquat) \R^7
+             object3_(qpos, qquat) \R^7
+             object4_(qpos, qquat) \R^7
+             robot_joint_vel       \R^7,
+             robot_gripper_qvel    \R^6,
+             ?                     \R^24
+        ]
+
+        obs
+            object1_qpos \R^3
+            object1_qquat(diff. convention) \R^4
+
+        NOTE: the prediction is different from the realized value. The predicted value has about 0.01 (rad) error
+        """
         assert(actions.ndim == 3)
         assert(actions.shape[-1] == self.action_dim)
         assert(x0.shape[-1] == self.state_dim)
@@ -36,19 +56,22 @@ class ArmEnvSimStatePredictor(StatePredictor):
             x0_iter      = x0[idx]
             actions_iter = actions[idx]
 
-            _ = self.env.reset_to({"states": np.concatenate([[0], x0_iter])})
+            # reset to the initial state
+            obs = self.env.reset_to({"states": x0_iter})
             
-            states_iter = [x0_iter]
+            states_iter = [np.concatenate([obs["robot0_joint_pos"], obs["robot0_joint_vel"]])]
+            n_link = obs["robot0_joint_pos"].shape[0]
 
+            # simulate the environment
             for action in actions_iter:
                 obs, _, _, _ = self.env.step(action)
-                states_iter.append(obs["flat"][-1, :])
+                states_iter.append(np.concatenate([obs["robot0_joint_pos"], obs["robot0_joint_vel"]]))
 
             states_iter = np.stack(states_iter, 0)
 
             t_des  = torch.linspace(0, self.dt*T, T+1)
-            x_des  = states_iter[:, :2]
-            dx_des = states_iter[:, 2:]
+            x_des  = states_iter[:, :n_link]
+            dx_des = states_iter[:, n_link:]
 
             plan = ReferenceTrajectory(t_des=t_des, x_des=x_des, dx_des=dx_des, dtype=self.dtype, device=self.device)
 

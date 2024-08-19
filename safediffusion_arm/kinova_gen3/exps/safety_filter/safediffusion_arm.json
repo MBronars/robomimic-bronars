@@ -7,9 +7,20 @@
         "render":{
             "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/safety_filter/",
             "zonotope":{
+                "zoom_factor": 1.4,
+                "ticks": true,
+                "grid": false,
                 "robot":{
                     "color": "black",
-                    "alpha": 0.9
+                    "alpha": 0.3
+                },
+                "plan":{
+                    "linewidth": 10,
+                    "color": "cyan"
+                },
+                "backup_plan":{
+                    "linewidth": 20,
+                    "color": "red"
                 },
                 "static_obs":{
                     "linewidth": 0.1,

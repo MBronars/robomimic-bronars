@@ -249,7 +249,10 @@ class SafetyEnv(EB.EnvBase, abc.ABC):
             img = self.img_danger_filter(img)
 
         return img
-
+    
+    def custom_render(self, mode, height, width, camera_name, **kwargs):
+        raise NotImplementedError
+    
     def serialize(self):
         pass
 

@@ -15,6 +15,7 @@ if use_zonopy:
 else: 
     from safediffusion.armtdpy.reachability.conSet import zonotope
 import safediffusion.utils.reachability_utils as reach_utils
+import safediffusion.utils.list_utils as ListUtils
 from safediffusion.envs.env_safety import SafetyEnv
 
 class GeomType(Enum):
@@ -39,12 +40,13 @@ class ZonotopeEnv(SafetyEnv):
         self.render_setting = kwargs["render"]["zonotope"]
         self.fig     = None
         self.ax      = None
+
+        # zonotope objects to draw
         self.patches = {
-            "robot": None,
-            "goal": None,
-            "dynamic_obs": None,
-            "static_obs": None,
-            "FRS": None
+            "robot"       : None,
+            "dynamic_obs" : None,
+            "static_obs"  : None,
+            "FRS"         : None
         }
 
         self.plots = {
@@ -336,6 +338,8 @@ class ZonotopeEnv(SafetyEnv):
             patches (list): list of patches that are drawn
             patch_data (list): list of vertices of the zonotopes
         """
+        zonotopes = ListUtils.maybe_flatten_the_list(zonotopes)
+
         patch_data = torch.vstack([zonotope.polyhedron_patch() for zonotope in zonotopes])
 
         patches = self.ax.add_collection3d(Poly3DCollection(patch_data,
@@ -361,9 +365,78 @@ class ZonotopeEnv(SafetyEnv):
         max_V = vertices.cpu().numpy().max(axis=0)
         min_V = vertices.cpu().numpy().min(axis=0)
 
+        # initialize the domain
         self.ax.set_xlim([min_V[0] - 0.1, max_V[0] + 0.1])
         self.ax.set_ylim([min_V[1] - 0.1, max_V[1] + 0.1])
         self.ax.set_zlim([min_V[2] - 0.1, max_V[2] + 0.5]) # robot height
+
+        # zoom setting
+        self.zoom(zoom_factor = self.render_setting["zoom_factor"])
+
+        # ticks setting
+        if not self.render_setting["ticks"]:
+            self.ax.set_xticks([])
+            self.ax.set_yticks([])
+            if hasattr(self.ax, 'set_zticks'):
+                self.ax.set_zticks([])
+        
+        # grid setting
+        self.ax.grid(self.render_setting["grid"])
+
+    def zoom(self, zoom_factor):
+        # Apply zoom by adjusting axis limits
+        if zoom_factor != 1.0:
+            xlim = self.ax.get_xlim()
+            ylim = self.ax.get_ylim()
+            zlim = self.ax.get_zlim() if hasattr(self.ax, 'get_zlim') else None
+
+            # Calculate the new limits based on the zoom factor
+            new_xlim = [(xlim[0] + (xlim[1] - xlim[0]) / 2) - (xlim[1] - xlim[0]) / (2 * zoom_factor), 
+                        (xlim[0] + (xlim[1] - xlim[0]) / 2) + (xlim[1] - xlim[0]) / (2 * zoom_factor)]
+            new_ylim = [(ylim[0] + (ylim[1] - ylim[0]) / 2) - (ylim[1] - ylim[0]) / (2 * zoom_factor), 
+                        (ylim[0] + (ylim[1] - ylim[0]) / 2) + (ylim[1] - ylim[0]) / (2 * zoom_factor)]
+
+            self.ax.set_xlim(new_xlim)
+            self.ax.set_ylim(new_ylim)
+
+            if zlim:
+                new_zlim = [(zlim[0] + (zlim[1] - zlim[0]) / 2) - (zlim[1] - zlim[0]) / (2 * zoom_factor), 
+                            (zlim[0] + (zlim[1] - zlim[0]) / 2) + (zlim[1] - zlim[0]) / (2 * zoom_factor)]
+                self.ax.set_zlim(new_zlim)
+    
+    def draw_zonotopes_in_kwargs_if_exists(self, kwargs, name):
+        """
+        Draw the zonotope category of name `name` at the figure canvas
+
+        Args:
+            kwargs (dict), the dictionary that has a zonotope kwargs[name]
+            name (str), the name of the zonotope category
+        """
+        if name in kwargs.keys() and kwargs[name] is not None:
+            if self.patches[name] is not None:
+                self.clear_patches(self.patches[name])
+            
+            self.patches[name], _ = self.draw_zonotopes(kwargs[name],
+                                                        self.render_setting[name]["color"],
+                                                        self.render_setting[name]["alpha"],
+                                                        self.render_setting[name]["linewidth"])
+
+    def draw_traj3D_in_kwargs_if_exists(self, kwargs, name):
+        """
+        Draw the trajectory of name `name` at the figure canvas
+        
+        """
+        if name in kwargs.keys() and kwargs[name] is not None:
+            if self.plots[name] is not None:
+                self.plots[name][0].remove()
+            self.plots[name] = self.ax.plot(
+                kwargs[name][:, 0], 
+                kwargs[name][:, 1], 
+                kwargs[name][:, 2], 
+                color=self.render_setting[name]["color"], 
+                linewidth=self.render_setting[name]["linewidth"],
+                linestyle=self.render_setting[name]["linestyle"]
+            )
 
     def custom_render(self, mode=None, height=None, width=None, camera_name="agentview", **kwargs):
         """Renders the environment as 3D zonotope world.
@@ -377,15 +450,6 @@ class ZonotopeEnv(SafetyEnv):
         # dynamic zonotopes
         self.draw_zonotopes_in_geom_table("dynamic_obs", remove_if_exists=True)
         self.draw_zonotopes_in_geom_table("robot", remove_if_exists=True)
-
-        # FRS
-        if "FRS" in kwargs.keys() and kwargs["FRS"] is not None:
-            if self.patches["FRS"] is not None:
-                self.clear_patches(self.patches["FRS"])
-            self.patches["FRS"], _ = self.draw_zonotopes(kwargs["FRS"], 
-                                                         self.render_setting["frs"]["color"], 
-                                                         self.render_setting["frs"]["alpha"], 
-                                                         self.render_setting["frs"]["linewidth"])
 
         if "plan" in kwargs.keys():
             if self.plots["plan"] is not None:
@@ -453,6 +517,7 @@ class ZonotopeEnv(SafetyEnv):
         return img
 
     def adjust_camera(self, camera_name):
+        # camera view
         if camera_name == "agentview":
             self.ax.view_init(elev=30, azim=30)
         elif camera_name == "frontview":

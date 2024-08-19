@@ -1,8 +1,10 @@
 import os
 
+# robosuite
+from robosuite import load_controller_config
+
 # robomimic
 import robomimic
-
 import robomimic.utils.torch_utils as TorchUtils
 import robomimic.utils.file_utils as FileUtils
 from safediffusion.utils.file_utils import load_config_from_json
@@ -14,7 +16,7 @@ import safediffusion_arm.kinova_gen3.utils as KinovaUtils
 POLICY_PATH = os.path.join(robomimic.__path__[0], 
                            "../diffusion_policy_trained_models/kinova/model_epoch_600_joint.pth") # delta-end-effector
 CONFIG_PATH = os.path.join(os.path.dirname(__file__),
-                           "../exps/basic/safediffusion_arm.json")
+                           "../exps/backup_planner/safediffusion_arm.json")
 
 def test(planner, env, horizon, seed, save_dir):
     """ 
@@ -43,7 +45,7 @@ if __name__ == "__main__":
     ckpt_path            = POLICY_PATH
     config_json_filename = CONFIG_PATH
     horizon              = 500
-    seed                 = 35
+    seed                 = 20
     # ----------------------------------- #
 
     # robomimic-style loading environment
@@ -51,7 +53,7 @@ if __name__ == "__main__":
     _, ckpt_dict      = FileUtils.policy_from_checkpoint(ckpt_path = ckpt_path, 
                                                          device    = device, 
                                                          verbose   = True)
-    ckpt_dict         = KinovaUtils.overwrite_controller_to_joint_position(ckpt_dict)
+    ckpt_dict["env_metadata"]["env_kwargs"]["controller_configs"] = KinovaUtils.load_joint_position_controller_config()
     
     env, _ = FileUtils.env_from_checkpoint(ckpt_dict        = ckpt_dict, 
                                            render           = False, 
@@ -64,7 +66,12 @@ if __name__ == "__main__":
     
     env    = SafePickPlaceBreadEnv(env, **config.safety)
     
-    policy = ArmtdPlanner(**config.safety)
+    controller_config       = ckpt_dict["env_metadata"]["env_kwargs"]["controller_configs"]
+    controller_config["dt"] = env.unwrapped_env.control_timestep # dt for the environment step
+
+    policy = ArmtdPlanner(action_config = controller_config,
+                          **config.safety)
+    
     policy.update_weight(dict(qpos_goal=1.0, qpos_projection=0.0))
 
     test(planner   = policy,

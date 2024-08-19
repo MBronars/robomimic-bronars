@@ -7,6 +7,7 @@ from robosuite.environments.robot_env import RobotEnv
 from robosuite.models.objects import MujocoObject
 import robosuite.utils.transform_utils as T
 
+from stl import mesh
 
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
@@ -166,6 +167,15 @@ def get_zonotope_from_sphere_geom(pos, rot, size):
 
     return zonotope(Z)
 
+def get_zonotope_from_stl_file(stl_file):
+    """
+    Create zonotope that bounds the mesh represented by the stl file
+    """
+    V = get_mesh_vertices_from_stl_file(stl_file)
+    Z = get_zonotope_from_mesh_vertices(V)
+
+    return Z
+
 def get_zonotope_from_mesh_vertices(vertices):
     """
     Create zonotope that represents the bounding box of mesh ver
@@ -180,6 +190,25 @@ def get_zonotope_from_mesh_vertices(vertices):
     Z = torch.asarray(Z)
 
     return zonotope(Z)
+
+def get_mesh_vertices_from_stl_file(stl_file):
+    """
+    Retrieves the mesh vertices from an STL file.
+
+    Args:
+        stl_file (str): The path to the STL file.
+
+    Returns:
+        numpy.ndarray: An array of unique vertices (Nx3) where N is the number of unique vertices.
+    """
+    # Load the STL file
+    stl_mesh = mesh.Mesh.from_file(stl_file)
+    
+    # Extract vertices directly, avoiding reshaping for better performance on large meshes
+    vertices = stl_mesh.vectors
+    unique_vertices = np.vstack({tuple(row) for row in vertices.reshape(-1, 3)})
+    
+    return unique_vertices
 
 
 def get_zonotope_from_segment(x1, x2):

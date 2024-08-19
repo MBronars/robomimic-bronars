@@ -13,7 +13,7 @@ from safediffusion.utils.rand_utils import set_random_seed
 POLICY_PATH = os.path.join(robomimic.__path__[0], 
                            "../diffusion_policy_trained_models/kinova/model_epoch_600_joint.pth") # delta-end-effector
 CONFIG_PATH = os.path.join(os.path.dirname(__file__),
-                           "../exps/safety_filter/safediffusion_arm.json")
+                           "../exps/diffusion_policy/safediffusion_arm.json")
 
 if __name__ == "__main__":
     # ----------------------------------------- #
@@ -22,7 +22,7 @@ if __name__ == "__main__":
     config_json_path = CONFIG_PATH
     rollout_horizon  = 1000
     render_mode      = "zonotope"
-    seed             = 11
+    seed             = 35
     # ----------------------------------------- #
     # This seed is used to set the random seed for the environment and the policy, 
     # regardless of the random seed used for the rollout
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     policy, env, config = KinovaUtils.policy_and_env_from_checkpoint_and_config(
                                         ckpt_path, 
                                         config_json_path, 
-                                        "safety_filter",
+                                        "diffusion",
                                     )
 
     # rollout the policy in the environment using random initial states

@@ -42,7 +42,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         self.rollout_policy_obs_keys = self.rollout_policy.policy.global_config.all_obs_keys
         
         # backup policy-related
-        self.backup_policy_weight_keys = self.backup_policy.weight_dict.keys()
+        self.backup_policy_weight_keys = list(self.backup_policy.weight_dict.keys())
         
         # safety filter parameter
         self.n_head            = config["filter"]["n_head"]    # length of the head actions (each unit corresponds to action applied to the environment)
@@ -65,6 +65,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         NOTE: In this version, the nominal policy generates the plan based on the o_{t}.
               Ideally, the policy should generate the plan based on the o_{t+T_a}. 
               This version is equivalent to assuming the perfect state prediction.
+
+        TODO: Rewrite this function -- when we use nominal policy, action queue is fine.
+        However, when we use backup policy, action should be decided every time.
         """
         if len(self._actions_queue) == 0:
             if self.has_no_backup_plan():
@@ -298,6 +301,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         """
         plan = self._backup_plan[:n+1]
         self._backup_plan = self._backup_plan[n:]
+        self._backup_plan.set_start_time(0)
 
         return plan
     

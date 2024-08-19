@@ -113,6 +113,7 @@ class ParameterizedPlanner(abc.ABC):
 
         # internal variables
         self.FRS = None
+        self.active_plan = None
         # # directory to save the plan
         # self.render_kwargs = None
         # if "render" in kwargs.keys():
@@ -230,7 +231,12 @@ class ParameterizedPlanner(abc.ABC):
 
         plan = self.postprocess_plan(plan)
 
+        self.register_plan(plan)
+
         return plan, info
+
+    def register_plan(self, plan):
+        self.active_plan = plan
 
     def make_plan(self, obs_dict, k_opt):
         """
@@ -347,7 +353,7 @@ class ParameterizedPlanner(abc.ABC):
 
     def to_tensor(self, x):
         if type(x) == torch.Tensor:
-            return x
+            return x.to(dtype=self.dtype, device=self.device)
         else:
             return torch.tensor(x, dtype=self.dtype, device=self.device)
 

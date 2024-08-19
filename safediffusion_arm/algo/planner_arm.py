@@ -1,22 +1,23 @@
 import os
+import math
 from copy import deepcopy
 
 import torch
 import numpy as np
-
-import robomimic
 import einops
 
+import robosuite
 
-from safediffusion.armtdpy.environments.arm_3d import Arm_3D
 from safediffusion.armtdpy.environments.arm_3d import Arm_3D
 from safediffusion.armtdpy.planning.armtd_3d import wrap_to_pi
 from safediffusion.armtdpy.reachability.forward_occupancy.FO import forward_occupancy
 from safediffusion.armtdpy.reachability.joint_reachable_set.load_jrs_trig import preload_batch_JRS_trig
 from safediffusion.armtdpy.reachability.joint_reachable_set.process_jrs_trig import process_batch_JRS_trig
 
-from safediffusion.algo.helper import traj_uniform_acc
+from safediffusion.algo.helper import traj_uniform_acc, ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
+from safediffusion.utils.npy_utils import scale_array_from_A_to_B
+import safediffusion.utils.robot_utils as RobotUtils
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -29,13 +30,30 @@ class ArmtdPlanner(ParameterizedPlanner):
     """
     Armtd-style of planner for the manipulator robot
     """
-    def __init__(self, LLC, robot_name="Kinova3", **kwargs):
+    def __init__(self, 
+                 action_config, 
+                 robot_name   = "Kinova3",
+                 **kwargs):
+        
         # prepare the useful variables for robot configuration, joint limits, reachable sets
         self.dimension  = 3
-        self.LLC        = LLC # low-level controller
 
         # load robot configuration
         self.robot_name = robot_name
+        self.load_robot_n_links(self.robot_name)
+
+        # Trajectory design
+        state_dict = {f"q{joint_id}": joint_id for joint_id in range(self.n_links)}
+        param_dict = {f"kv{joint_id}": joint_id for joint_id in range(self.n_links)}
+        param_dict.update({f"ka{joint_id}": joint_id + self.n_links for joint_id in range(self.n_links)})
+
+        # Timing
+        dt         = 0.01 # planning time interval
+        t_f        = 1.0  # planning horizon
+
+        ParameterizedPlanner.__init__(self, state_dict, param_dict, dt, t_f, **kwargs)
+
+        # robot configuration
         self.load_robot_config_and_joint_limits(self.robot_name)
         self.load_robot_link_zonotopes(self.robot_name)
         self.load_joint_reachable_set()
@@ -45,26 +63,16 @@ class ArmtdPlanner(ParameterizedPlanner):
         self.max_combs  = kwargs["zonotope"]["max_comb"]
         self.combs      = self.generate_combinations_upto(self.max_combs)
 
-        # Trajectory design
-        state_dict = {f"q{joint_id}": joint_id for joint_id in range(self.n_links)}
-        param_dict = {f"kv{joint_id}": joint_id for joint_id in range(self.n_links)}
-        param_dict.update({f"ka{joint_id}": joint_id + self.n_links for joint_id in range(self.n_links)})
-
-        # Timing
-        dt         = 0.01
-        t_f        = 1.0
-
-        ParameterizedPlanner.__init__(self, state_dict, param_dict, dt, t_f, **kwargs)
-
         # piecewise trajectory design
         self.time_pieces = [0.5]
-        assert min(self.time_pieces) > 0
-        assert max(self.time_pieces) < t_f
 
         # trajectory optimization
         self.opt_dim     = range(self.n_links, 2*self.n_links)
         self.weight_dict = dict(qpos_goal = 0.0, qpos_projection = 0.0)
 
+        # Environment configuration
+        self.t_cur = 0
+        self.action_config = action_config
 
     # ---------------------------------------------- #
     # Loading the robot configurations
@@ -89,11 +97,19 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         TODO: unify link_zono and link_polyzono later
         """
-        robot_model = Arm_3D(robot_name)
-        self._link_zonos_stl = robot_model._link_zonos
+        # load the robot arm zonotopes
+        robot_model              = Arm_3D(robot_name)
+        self._link_zonos_stl     = robot_model._link_zonos
         self._link_polyzonos_stl = robot_model.link_zonos
-
-
+        
+    
+    def load_robot_n_links(self, robot_name):
+        """
+        Load the number of the links given the robot name
+        """
+        robot_model    = Arm_3D(robot_name)
+        self.n_links = robot_model.n_links # number of links (without gripper)        
+    
     def load_robot_config_and_joint_limits(self, robot_name):
         """
         Cache the robot information, mainly referencing Arm_3D library (armtdpy/environments/robots)
@@ -105,12 +121,15 @@ class ArmtdPlanner(ParameterizedPlanner):
         robot_model    = Arm_3D(robot_name)
 
         # robot configuration specifications
-        self.n_links = robot_model.n_links # number of links (without gripper)
         self.params  = {'n_joints' : self.n_links,
                        'P'        : [self.to_tensor(p) for p in robot_model.P0], 
                        'R'        : [self.to_tensor(r) for r in robot_model.R0]}
         
         self.joint_axes = self.to_tensor(robot_model.joint_axes)
+        w = self.to_tensor([[[0,0,0],[0,0,1],[0,-1,0]],
+                            [[0,0,-1],[0,0,0],[1,0,0]],
+                            [[0,1,0],[-1,0,0],[0,0,0.0]]])
+        self.rot_skew_sym = (w@self.joint_axes.T).transpose(0,-1)
 
         # safety specifications 1: joint angle limit
         self.pos_lim        = robot_model.pos_lim.cpu()
@@ -119,7 +138,7 @@ class ArmtdPlanner(ParameterizedPlanner):
         self.lim_flag       = robot_model.lim_flag.cpu()
 
         # safety specifications 2: joint velocity limit
-        self.vel_lim = robot_model.vel_lim.cpu()
+        self.vel_lim        = robot_model.vel_lim.cpu()
         
         # TODO: we should find ohter way to retrieve control_freq, output_max, maybe config.safety
         # self.dt_plan  = 1.0/robot_model.env.control_freq
@@ -212,13 +231,24 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         NOTE: Make sure to deepcopy the obs_dict and goal_dict
         """
-        # NOTE: makeshift
-        goal_dict = {}
-        goal_dict["qgoal"] = self.to_tensor(torch.zeros(7, ))
+        # we do not want for obs_dict, goal_dict to change
+        obs_dict_processed  = deepcopy(obs_dict)
+        goal_dict_processed = deepcopy(goal_dict)
+        
+        # Objective 1: qpos_goal
+        if "qpos_goal" in goal_dict.keys():
+            qgoal = self.to_tensor(goal_dict["qpos_goal"]["qgoal"])
+            goal_dict_processed["qpos_goal"]["qgoal"] = qgoal
+            self.goal_zonotope = self.get_arm_zonotopes_at_q(q              = qgoal,
+                                                            T_frame_to_base = obs_dict["T_world_to_base"])
 
-        return deepcopy(obs_dict), deepcopy(goal_dict)
+        # Objective 2: qpos_projection
+        if "qpos_projection" in goal_dict.keys():
+            pass
+
+        return obs_dict_processed, goal_dict_processed
     
-    def _prepare_problem_data(self, obs_dict, goal_dict = None, random_initialization = False):
+    def _prepare_problem_data(self, obs_dict, goal_dict = None, random_initialization = True):
         """
         Prepare the meta-data for the trajectory optimization and the data for
         constraints, objectives to avoid redundant computations.
@@ -265,13 +295,20 @@ class ArmtdPlanner(ParameterizedPlanner):
         """
         data = {}
 
+        # prepare data for the eef_goal objective
         active_obj_id   = 1
         active_obj_pose = obs_dict["object"][7*active_obj_id:7*(active_obj_id+1)]
-
-        data = dict(
-            eef_pose  = dict(eefgoal = active_obj_pose),
-            qpos_goal = dict(qgoal = goal_dict["qgoal"])
-        )  
+        data["eef_goal"] = {}
+        data["eef_goal"]["pose"] = active_obj_pose
+        
+        # prepare data for the qpos_goal
+        if "qpos_goal" in goal_dict.keys():
+            data["qpos_goal"] = {}
+            data["qpos_goal"]["qgoal"] = goal_dict["qpos_goal"]["qgoal"]
+        
+        if "qpos_projection" in goal_dict.keys():
+            data["qpos_projection"] = {}
+            data["qpos_projection"]["plan"] = goal_dict["qpos_projection"]["plan"]
 
         return data
 
@@ -294,14 +331,22 @@ class ArmtdPlanner(ParameterizedPlanner):
         Grad = {}
         
         # qpos goal
-        Obj["qpos_goal"], Grad["qpos_goal"] = self._compute_objective_qpos_goal(
-                                                        ka    = ka, 
-                                                        qpos  = qpos, 
-                                                        qvel  = qvel, 
-                                                        data  = objective_data["qpos_goal"])
-        # eef goal
+        if "qpos_goal" in objective_data.keys():
+            Obj["qpos_goal"], Grad["qpos_goal"] = self._compute_objective_qpos_goal(
+                                                            ka    = ka, 
+                                                            qpos  = qpos, 
+                                                            qvel  = qvel, 
+                                                            **objective_data["qpos_goal"])
+        # qpos_projection
+        if "qpos_projection" in objective_data.keys():
+            Obj["qpos_projection"], Grad["qpos_projection"] = self._compute_objective_qpos_projection(
+                                                                    ka = ka,
+                                                                    qpos = qpos,
+                                                                    qvel = qvel,
+                                                                    **objective_data["qpos_projection"])
 
-        # qpos project
+        # eef goal: TODO
+        
         
         # weighting
         total_cost = self.to_tensor(0)
@@ -317,7 +362,7 @@ class ArmtdPlanner(ParameterizedPlanner):
         
         return Obj, Grad
     
-    def _compute_objective_qpos_goal(self, ka, qpos, qvel, data):
+    def _compute_objective_qpos_goal(self, ka, qpos, qvel, qgoal):
         """
         c(ka) = ||q(t_f) - qgoal||
 
@@ -331,10 +376,6 @@ class ArmtdPlanner(ParameterizedPlanner):
             Obj: c(ka)
             Grad: the gradient of c(ka) w.r.t. ka
         """
-        assert "qgoal" in data.keys()
-
-        qgoal          = data["qgoal"]
-
         T_PEAK         = self.time_pieces[0]
         T_FULL         = self.t_f
         
@@ -351,6 +392,36 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         Obj  = torch.sum(dq**2)
         Grad = 2*grad_qf*dq
+
+        return Obj, Grad
+    
+    def _compute_objective_qpos_projection(self, ka, qpos, qvel, plan):
+        """
+        c(ka) = \sum_{t=0}^{T}||q(t) - qd(t)||
+
+        Args:
+            ka:   (n_optvar,) joint acceleration - unnormalized
+            qpos: (n_link,) current joint position
+            qvel: (n_link,) current joint velocity
+            plan: (ReferenceTrajectory), the nominal trajectory to project
+        
+        Returns:
+            Obj: c(ka)
+            Grad: the gradient of c(ka) w.r.t. ka
+        """
+        assert(isinstance(plan, ReferenceTrajectory))
+
+        T_FULL         = self.t_f
+
+        t_eval = plan.t_des[plan.t_des <= T_FULL]
+        q_eval = plan.x_des[plan.t_des <= T_FULL]
+
+        q       = (qpos + torch.outer(t_eval, qvel)+ 0.5*torch.outer(t_eval**2, ka))
+        dq      = self.wrap_cont_joint_to_pi(q-q_eval)
+        grad_dq = 0.5*t_eval**2
+
+        Obj     = torch.sum(torch.mean(dq**2, dim=0))
+        Grad    = 2*grad_dq@dq
 
         return Obj, Grad
 
@@ -558,53 +629,290 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         return Cons, Jac
     
+    def collision_check(self, plan, obs):
+        """
+        Discrete collision checking algorithm.
+
+        It checks the collision by intersecting the robot zonotopes at each planning time steps with
+        the obstacles zonotopes.
+
+        Args
+            plan: ReferenceTrajectory torch array (qpos)
+            obs: observation dictionary
+
+        Returns
+            is_collision: bool
+
+        NOTE: This could be accelerated using batch zonotope
+        """
+        assert isinstance(plan, ReferenceTrajectory), "The plan should be the instance of ReferenceTrajectory"
+        assert "zonotope" in obs.keys() and "robot" in obs["zonotope"].keys() and "obstacle" in obs["zonotope"].keys()
+        robot_zonotope = obs["zonotope"]["robot"][0]
+        assert(torch.allclose(robot_zonotope.center, plan[0][1]+self.offset, 1e-6), 
+               "The plan is not consistent with the current position")
+
+    def collision_check(self, plan, obs):
+        assert isinstance(plan, ReferenceTrajectory), "The plan should be the instance of ReferenceTrajectory"
+        assert "zonotope" in obs.keys() and "obstacle" in obs["zonotope"].keys()
+
+        qs = plan.x_des
+        R_q = self.rot(qs)
+
+        obs_zonos = obs["zonotope"]["obstacle"]
+        n_obs = len(obs_zonos)
+
+        if len(R_q.shape) == 4:
+            time_steps = len(R_q)
+            R, P = self.to_tensor(torch.eye(3)), self.to_tensor(torch.zeros(3))
+            for j in range(self.n_links):
+                P = R@self.params["P"][j] + P
+                R = R@self.params["R"][j]@R_q[:,j]
+                link = batchZonotope(self._link_polyzonos_stl[j].Z.unsqueeze(0).repeat(time_steps,1,1))
+                link = R@link+P
+                for o in range(n_obs):
+                    buff = link - obs_zonos[o]
+                    _,b = buff.polytope(self.combs)
+                    unsafe = b.min(dim=-1)[0]>1e-6
+                    if any(unsafe):
+                        self.qpos_collision = qs[unsafe]
+                        return True
+
+        else:
+            time_steps = 1
+            R, P = self.to_tensor(torch.eye(3)), self.to_tensor(torch.zeros(3))
+            for j in range(self.n_links):
+                P = R@self.params["P"][j] + P
+                R = R@self.params["R"][j]@R_q[j]
+                link = R@self._link_zonos_stl[j]+P
+                for o in range(n_obs):
+                    buff = link - obs_zonos[o]
+                    _,b = buff.polytope(self.combs)
+                    if min(b) > 1e-6:
+                        self.qpos_collision = qs
+                        return True
+        
+        return False
+
     # ---------------------------------------------- #
     # Helper
     # ---------------------------------------------- #
-
     def wrap_cont_joint_to_pi(self, phases):
         if len(phases.shape) == 1:
             phases = phases.unsqueeze(0)
         phases_new = torch.clone(phases)
         phases_new[:,~self.lim_flag] = (phases[:,~self.lim_flag] + torch.pi) % (2 * torch.pi) - torch.pi
-        return phases_new 
-    
-    def track_reference_traj(self, obs_dict, reference_traj):
-        """
-        Return the actions that can be sent to the environment.
+        return phases_new
 
-        Action representation for the robomimic joint angle controller is the delta joint angle.
+    def get_action(self, obs_dict, goal_dict = None):
+        """
+        Get action that can be sent to the environment
+        """
+        # if there is no plan, generate the plan
+        # TODO: change `self.time_pieces[0]`
+        if self.active_plan is None or self.t_cur > self.time_pieces[0]:
+            _, _ = self.__call__(obs_dict, goal_dict, random_initialization=False)
+            self.t_cur = 0
+
+        self.t_cur += self.action_config["dt"]
+
+        return self.get_action_from_plan_at_t(self.t_cur, self.active_plan, obs_dict)
+        
+    def get_action_from_plan_at_t(self, t_des, plan, obs_dict):
+        """
+        Plan to the action representation
+
+        The action configuration is the normalized delta joint angle.
 
         Args:
-            ob  : (dict), observation dictionary from the environment
-            plan: (ReferenceTrajectory): joint angle reference trajectories
-        """
+            t_des (float): the query time to retrieve the plan, desired joint angle
+            plan (ReferenceTrajectory): the plan to track
+            obs_dict (dict): this dictionary includes the current state information
         
-        qpos_curr      = np.array(self.get_pstate_from_obs(obs_dict = obs_dict))
+        Returns:
+            action (float): the normalized delta joint angle
+        """
+        qpos = np.array(self.get_pstate_from_obs(obs_dict = obs_dict))
+        qdes = plan.x_des[math.ceil(t_des/self.dt)]
 
-        # compensate for the initial lag
-        delta_qpos     = np.array(reference_traj.x_des[1:] - reference_traj.x_des[:-1])
-        delta_qpos[0] += reference_traj.x_des[0] - qpos_curr
-        actions        = delta_qpos
-        actions        = np.clip(actions, self.LLC.output_min, self.LLC.output_max)
+        action = (qdes - qpos).cpu().numpy()
+        action  = scale_array_from_A_to_B(action, 
+                                          A=[self.action_config["output_min"], self.action_config["output_max"]], 
+                                          B=[self.action_config["input_min"] , self.action_config["input_max"]]) # (T, D) array
+        action  = np.clip(action, self.action_config["input_min"], self.action_config["input_max"])
 
-
-
-
-
-
-
-
+        return action
 
 
-        offset  = np.array(reference_traj.x_des[0] - qpos) # if initial planning state is not the same as the current state
-        actions = np.array(reference_traj.x_des[1:] - reference_traj.x_des[:-1]) + offset
-        if ((actions.max(0) > self.LLC.output_max) | (actions.min(0) < self.LLC.output_min)).any():
-            self.disp("Actions are out of range: joint goal position gets different with the plan", self.verbose)
 
-        actions = np.clip(actions, self.LLC.output_min, self.LLC.output_max)
-        actions = scale_array_from_A_to_B(actions, A=[self.LLC.output_min, self.LLC.output_max], B=[self.LLC.input_min, self.LLC.input_max]) # (T, D) array
-        actions = np.clip(actions, self.LLC.input_min, self.LLC.input_max)
-        assert(np.all(actions >= self.LLC.input_min) and np.all(actions <= self.LLC.input_max)), "Actions are out of range"
+    def rot(self, q):
+        """
+        Rodrigues' formula
 
-        return actions
+        Args:
+            q: the joint angle
+        
+        Returns:
+            R: rotation matrix
+        """
+        q = q.reshape(q.shape+(1,1))
+
+        R = self.to_tensor(torch.eye(3)) + \
+            torch.sin(q) * self.rot_skew_sym + \
+            (1-torch.cos(q))*self.rot_skew_sym@self.rot_skew_sym
+
+        return R
+    
+    def get_arm_zonotopes_at_q(self, q, T_frame_to_base):
+        """
+        Return the forward occupancy of the robot arms with the zonotopes.
+        It does by doing the forward kinematics of the robot.
+
+        Args
+            qpos: (n_links,) torch tensor
+
+        Output
+            arm_zonos: list of zonotopes
+        """
+        Ri = self.to_tensor(T_frame_to_base[0:3, 0:3])
+        Pi = self.to_tensor(T_frame_to_base[0:3, 3])
+        
+        R_qi = self.rot(q)
+        arm_zonos = []
+        for i in range(self.n_links):
+            Pi = Ri@self.params["P"][i] + Pi
+            Ri = Ri@self.params["R"][i]@R_qi[i]
+            arm_zono = Ri@self._link_zonos_stl[i] + Pi
+            arm_zonos.append(arm_zono)
+        
+        return arm_zonos
+    
+    def get_eef_pos_at_q(self, q, T_frame_to_base):
+        """
+        Return the pose of the robot ende-effector at given joint angle
+        It does by doing the forward kinematics of the robot.
+
+        Args
+            qpos: (n_links,) torch tensor
+
+        Output
+            P: position of the end-effector
+        """
+        Ri = self.to_tensor(T_frame_to_base[0:3, 0:3])
+        Pi = self.to_tensor(T_frame_to_base[0:3, 3])
+        
+        R_qi = self.rot(q)
+        for i in range(self.n_links):
+            Pi = Ri@self.params["P"][i] + Pi
+            Ri = Ri@self.params["R"][i]@R_qi[i]
+        
+        return Pi.cpu().numpy()
+    
+    def get_eef_pos_from_plan(self, plan, T_world_to_base):
+        assert isinstance(plan, ReferenceTrajectory)
+
+        eef_pos = [self.get_eef_pos_at_q(plan.x_des[i], T_world_to_base)
+                   for i in range(len(plan))]
+        eef_pos = np.stack(eef_pos, axis=0)
+
+        return eef_pos
+
+
+    def get_forward_occupancy_from_plan(self, plan, T_world_to_base, only_end_effector = False):
+        """
+        Get series of forward occupancy zonotopes from the given plan
+
+        Args:
+            plan (ReferenceTrajectory), the plan that contains the joint angle, joint velocity
+            T_world_to_base (4 by 4 matrix), the transformation matrix from the world to the base
+            only_end_effector (bool), get forward occupancy of only end effector
+
+        Returns:
+            FO_link (zonotopes), the zonotope list of plan length
+        """
+        assert isinstance(plan, ReferenceTrajectory)
+
+        FO_link = []
+
+        for i in range(len(plan)):
+            FO_i = self.get_arm_zonotopes_at_q(plan.x_des[i], T_world_to_base)
+            if only_end_effector:
+                FO_i = [FO_i[-1]]
+            FO_link.append(FO_i)
+
+        return FO_link
+
+class ArmtdPlannerXML(ArmtdPlanner):
+    def __init__(self,
+                 action_config, 
+                 robot_name,
+                 **kwargs):
+        
+        self.robot_xml_file       = os.path.join(robosuite.__path__[0], 
+                                                 f"models/assets/robots/{robot_name.lower()}/robot.xml")
+        self.joint_vel_limit_dict = dict(
+            kinova3 = [1.3963, 1.3963, 1.3963, 1.3963, 1.2218, 1.2218, 1.2218]
+        )
+        
+        assert os.path.exists(self.robot_xml_file)
+
+        super().__init__(action_config, robot_name, **kwargs)
+
+    def load_robot_n_links(self, robot_name):
+        params = RobotUtils.load_single_mujoco_robot_arm_params(self.robot_xml_file)
+        self.n_links = params['n_joints']
+
+    def load_robot_config_and_joint_limits(self, robot_name):
+        """
+        Read the params (n_joints, P, R, joint_axes) from the robosuite xml file
+        """
+        assert robot_name.lower() in self.joint_vel_limit_dict.keys(), \
+            f"The joint velocity limit of {robot_name} has not been registered."
+        
+        # parse parameters from the xml file
+        
+        params = RobotUtils.load_single_mujoco_robot_arm_params(self.robot_xml_file)
+
+        self.params = {'n_joints': params['n_joints'],
+                       'P'       : [self.to_tensor(p) for p in params['P']],
+                       'R'       : [self.to_tensor(r) for r in params['R']]}
+        
+        # joint axes
+        self.joint_axes   = self.to_tensor(torch.stack(params['joint_axes']))
+        w = self.to_tensor([[[0,0,0],[0,0,1],[0,-1,0]],
+                            [[0,0,-1],[0,0,0],[1,0,0]],
+                            [[0,1,0],[-1,0,0],[0,0,0.0]]])
+        self.rot_skew_sym = (w@self.joint_axes.T).transpose(0,-1)
+        
+        # joint position limit
+        self.pos_lim        = self._process_pos_lim(params['pos_lim'])
+        self.lim_flag       = np.array(params['lim_flag'])
+        self.actual_pos_lim = self.pos_lim[self.lim_flag]
+        self.n_pos_lim      = int(sum(self.lim_flag))
+
+        # joint velocity limit
+        self.vel_lim        = self.to_tensor(self.joint_vel_limit_dict[robot_name.lower()])
+
+    def _process_pos_lim(self, pos_lim):
+        """
+        Process the joint position limit compatible to ArmtdPlanner
+
+        Args:
+            pos_lim (list): list length of n_joint, each list has 2D array of joint limit [min, max].
+                            If the joint limit does not exist, it says None.
+        
+        Returns:
+            pos_lim_processed (tensor): an array size of (n_joint, 2), 
+                                        1st column indicates max, 2nd column indicates min.
+                                        None has been replaced to [pi, -pi]
+        """
+        PI = torch.pi
+        
+        pos_lim_processed = [(torch.tensor([PI, -PI]) 
+                              if x is None else torch.tensor([max(x), min(x)])) 
+                              for x in pos_lim]
+        
+        pos_lim_processed = self.to_tensor(torch.stack(pos_lim_processed))
+
+        return pos_lim_processed
+
+        

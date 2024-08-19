@@ -64,6 +64,8 @@ def import_robot(urdf_file,gravity=True):
 def load_sinlge_robot_arm_params(urdf_file,gravity=True):
     '''
     Assumed all the active joint is revolute.
+
+    TODO: add the code that parse the urdf into the link zonotopes
     '''
     
     link_path = os.path.join(LINK_ZONO_PATH,urdf_file)

@@ -5,11 +5,23 @@
             "n_head": 10
         },
         "render":{
-            "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/backup_planner/",
+            "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/add_gripper/",
             "zonotope":{
+                "FRS":{
+                    "color": "green",
+                    "alpha": 0.5
+                },
                 "robot":{
                     "color": "black",
-                    "alpha": 0.6
+                    "alpha": 0.01
+                },
+                "plan":{
+                    "linewidth": 10,
+                    "color": "cyan"
+                },
+                "backup_plan":{
+                    "linewidth": 20,
+                    "color": "red"
                 },
                 "static_obs":{
                     "linewidth": 0.1,

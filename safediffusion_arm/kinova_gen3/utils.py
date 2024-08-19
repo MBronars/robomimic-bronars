@@ -15,13 +15,16 @@ from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.utils.rand_utils import set_random_seed
 from safediffusion.envs.env_safety import SafetyEnv
 
-from safediffusion_arm.environments.safe_arm_env import SafePickPlaceBreadEnv
-from safediffusion_arm.algo.planner_arm import ArmtdPlanner
+from safediffusion_arm.environments.safe_pickplace_env import SafePickPlaceBreadEnv
+from safediffusion_arm.algo.planner_arm import ArmtdPlanner, ArmtdPlannerXML
 from safediffusion_arm.algo.predictor_arm import ArmEnvSimStatePredictor
-from safediffusion_arm.algo.safety_filter_arm import SafeDiffusionPolicyArm, IdentityBackupPolicyArm
+from safediffusion_arm.algo.safety_filter_arm import SafeDiffusionPolicyArm, IdentityDiffusionPolicyArm, IdentityBackupPolicyArm
 
-def overwrite_controller_to_joint_position(ckpt_dict):
-    ckpt_dict['env_metadata']['env_kwargs']['controller_configs'] = {
+def load_joint_position_controller_config():
+    """
+    Joint position controller for the Kinova Environment
+    """
+    return {
         "type": "JOINT_POSITION",
         "input_max": 1,
         "input_min": -1,
@@ -36,7 +39,6 @@ def overwrite_controller_to_joint_position(ckpt_dict):
         "interpolation": None,
         "ramp_ratio": 0.2
         }
-    return ckpt_dict
 
 
 def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_type, env_kwargs=None, policy_kwargs=None):
@@ -77,6 +79,15 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
     if env_kwargs is not None:
         for k, v in env_kwargs.items():
             ckpt_dict["env_metadata"]["env_kwargs"][k] = v
+
+    # switching controller
+    perf_controller_config    = ckpt_dict["env_metadata"]["env_kwargs"]["controller_configs"]
+    backup_controller_config  = load_joint_position_controller_config()
+    ckpt_dict["env_metadata"]["env_kwargs"]["controller_configs"] = {
+        'type': 'SWITCHING',
+        "interpolation": None,
+        'controllers': [perf_controller_config, backup_controller_config]
+    }
     
     # robomimic-style loading environment
     env, _ = FileUtils.env_from_checkpoint(ckpt_dict        = ckpt_dict, 
@@ -86,31 +97,46 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
     
     # wrap the environment with the safety wrapper
     env_safe  = SafePickPlaceBreadEnv(env, **config.safety)
-    dt_action = env_safe.unwrapped_env.sim.model.opt.timestep
+    dt_action = 1/env_safe.unwrapped_env.control_freq
 
-    
     # wrap the policy that needs 1) state predictor and 2) backup_policy
     ckpt_dictCopy = deepcopy(ckpt_dict)
-    envCopy, _   = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dictCopy, render=False, render_offscreen=True, verbose=True)
+    ckpt_dictCopy["env_metadata"]["env_kwargs"]["controller_configs"] = perf_controller_config
+    envCopy, _   = FileUtils.env_from_checkpoint(ckpt_dict=ckpt_dictCopy, 
+                                                 render=False, 
+                                                 render_offscreen=True, 
+                                                 verbose=True)
+    
     envCopy_safe = SafePickPlaceBreadEnv(envCopy, **config.safety)
     predictor    = ArmEnvSimStatePredictor(envCopy_safe)
 
     # predictor = DiffuserStatePredictor(rollout_policy = policy, dt = dt_action)
     # load the wrapped policy
+    backup_controller_config["dt"] = env_safe.unwrapped_env.control_timestep
+    # backup_policy = ArmtdPlanner(action_config = backup_controller_config, 
+    #                              **config.safety)
+    backup_policy = ArmtdPlannerXML(action_config = backup_controller_config,
+                                    robot_name = "Kinova3", 
+                                    **config.safety)
+    
     if policy_type == "diffusion":
-        policy_wrapped  = IdentityBackupPolicyArm(
+        policy_wrapped  = IdentityDiffusionPolicyArm(
                                         rollout_policy = policy, 
-                                        backup_policy  = ArmtdPlanner(**config.safety),
+                                        backup_policy  = backup_policy,
                                         dt_action      = dt_action,
                                         predictor      = predictor,
+                                        rollout_controller_name = "OSC_POSE",
+                                        backup_controller_name  = "JOINT_POSITION",
                                         **config.safety)
 
     elif policy_type == "safety_filter":
         policy_wrapped  = SafeDiffusionPolicyArm(
-                                        rollout_policy = policy, 
-                                        backup_policy  = ArmtdPlanner(**config.safety),
+                                        rollout_policy = policy,
+                                        backup_policy  = backup_policy,
                                         dt_action      = dt_action,
                                         predictor      = predictor,
+                                        rollout_controller_name = "OSC_POSE",
+                                        backup_controller_name  = "JOINT_POSITION",
                                         **config.safety)
         
     elif policy_type == "backup":
@@ -154,8 +180,6 @@ def rollout_planner_with_seed(planner,
     os.makedirs(save_dir, exist_ok=True)
     video_path = os.path.join(save_dir, f"rollout_seed{seed}_n{env.name}_m{render_mode}.mp4")
     video_writer = imageio.get_writer(video_path, fps=video_fps)
-
-    T_p = planner.time_pieces[0]/planner.dt
     
     for step_i in range(horizon):
         if step_i % 10 == 0:
@@ -163,33 +187,9 @@ def rollout_planner_with_seed(planner,
             print(f"Step {step_i}: State ")
             print("====================================================================")
 
-        # TODO: pop zonotope and safe here?
-        if step_i % T_p == 0:
-            plan, info = planner(obs_dict=obs)
-
-        # decide next action
-        qpos    = planner.get_pstate_from_obs(obs_dict=obs)
-
-        # actions = env.get_actions_from_joint_angles(qpos, plan)
-
-        if info["status"] == SUCCESS_FLAG:
-            plan.x_des[0] - qpos
-
-
-
-
-
-        # TODO: make plan to the joint action repr.
-        # ctrl = self.env.helper_controller
-        # offset = np.array(traj.x_des[0] - self.env.qpos) # if initial planning state is not the same as the current state
-        # actions = np.array(traj.x_des[1:] - traj.x_des[:-1]) + offset
-        # if ((actions.max(0) > ctrl.output_max) | (actions.min(0) < ctrl.output_min)).any():
-        #     self.disp("Actions are out of range: joint goal position gets different with the plan", self.verbose)
-        # actions = np.clip(actions, ctrl.output_min, ctrl.output_max)
-        # actions = scale_array_from_A_to_B(actions, A=[ctrl.output_min, ctrl.output_max], B=[ctrl.input_min, ctrl.input_max]) # (T, D) array
-        # actions = np.clip(actions, ctrl.input_min, ctrl.input_max)
-
-        next_obs, _, done, _ = env.step(act)
+        action_arm = planner.get_action(obs_dict = obs)
+        action     = np.concatenate([action_arm, [0]])
+        next_obs, _, done, _ = env.step(action)
         success = env.is_success()["task"]
 
         # Online rendering
@@ -211,6 +211,7 @@ def rollout_planner_with_seed(planner,
                     for cam_name in camera_names:
                         video_img.append(
                             env.render(mode = render_mode, height = 512, width = 512, camera_name = cam_name,
+                                       goal = planner.goal_zonotope
                                         # plan        = policy.nominal_plan.x_des + env.robotqpos_to_worldpos, 
                                         # backup_plan = policy._backup_plan.x_des + env.robotqpos_to_worldpos,
                                         # intervened  = policy.intervened,
@@ -280,7 +281,7 @@ def rollout_with_seed(policy,
     os.makedirs(save_dir, exist_ok=True)
     video_path = os.path.join(save_dir, f"rollout_seed{seed}_n{env.name}_m{render_mode}.mp4")
     video_writer = imageio.get_writer(video_path, fps=video_fps)
-
+    
     # logging variables
     # num_intervention = 0
     # num_unsafe = 0
@@ -290,15 +291,13 @@ def rollout_with_seed(policy,
             print("====================================================================")
             # TODO: write the summary of each step 
             print(f"Step {step_i}: State ")
-            # print(f"Step {step_i}:  State {np.round(obs['flat'][-1], 2)}, Goal {np.round(goal['flat'][:2], 2)}")
             print("====================================================================")
-
-        # TODO: pop zonotope and safe here?
-        obs = {k: obs[k] for k in policy.policy.global_config.all_obs_keys}
         
-        act = policy(obs_dict=obs)
-        # TODO: what is `done`` here?
+        act, controller_to_use = policy(ob = obs)
+
+        env.switch_controller(controller_to_use)
         next_obs, _, done, _ = env.step(act)
+
         success = env.is_success()["task"]
 
         # TODO: implement Safety Wrapper
@@ -324,13 +323,36 @@ def rollout_with_seed(policy,
                 
                 elif render_mode == "zonotope":
                     video_img = []
+
+                    # prepare visualization
+                    plan = policy.backup_policy.get_eef_pos_from_plan(
+                            plan              = policy.nominal_plan,
+                            T_world_to_base   = obs["T_world_to_base"],
+                    )
+
+                    backup_plan = policy.backup_policy.get_eef_pos_from_plan(
+                            plan              = policy._backup_plan,
+                            T_world_to_base   = obs["T_world_to_base"],
+                    )
+
+                    FRS  = policy.backup_policy.get_forward_occupancy_from_plan(
+                            plan              = policy._backup_plan,
+                            T_world_to_base   = obs["T_world_to_base"]
+                    )
+
                     for cam_name in camera_names:
                         video_img.append(
-                            env.render(mode = render_mode, height = 512, width = 512, camera_name = cam_name,
-                                        # plan        = policy.nominal_plan.x_des + env.robotqpos_to_worldpos, 
-                                        # backup_plan = policy._backup_plan.x_des + env.robotqpos_to_worldpos,
-                                        # intervened  = policy.intervened,
-                                        # FRS         = FRS
+                            env.render(mode        = render_mode, 
+                                       height      = 512, 
+                                       width       = 512, 
+                                       camera_name = cam_name,
+                                       # zonotope
+                                       FRS         = FRS,
+                                       goal        = policy.backup_policy.goal_zonotope,
+                                       # trajectory
+                                       plan        = plan,
+                                       backup_plan = backup_plan,
+                                       intervened  = policy.intervened,
                                     )
                         )
                     video_img = np.concatenate(video_img, axis=1)

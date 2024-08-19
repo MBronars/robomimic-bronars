@@ -29,6 +29,8 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         self.safety.render.zonotope.width = 20
         self.safety.render.zonotope.height = 20
         self.safety.render.zonotope.ticks  = True
+        self.safety.render.zonotope.zoom_factor = 1.5
+        self.safety.render.zonotope.grid = True
         
         self.safety.render.zonotope.robot.color = "black"
         self.safety.render.zonotope.robot.alpha = 0.1
@@ -51,17 +53,19 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         self.safety.render.zonotope.dynamic_obs.linewidth = 0.5
         
         # FRS (optional)
-        self.safety.render.zonotope.frs.color = "green"
-        self.safety.render.zonotope.frs.alpha = 0.1
-        self.safety.render.zonotope.frs.linewidth = 0.5
+        self.safety.render.zonotope.FRS.color = "green"
+        self.safety.render.zonotope.FRS.alpha = 0.1
+        self.safety.render.zonotope.FRS.linewidth = 0.5
 
         # Plan (optional)
-        self.safety.render.zonotope.plan.color = "blue"
+        self.safety.render.zonotope.plan.color = "cyan"
+        self.safety.render.zonotope.plan.alpha = 0.1
         self.safety.render.zonotope.plan.linewidth = 8.0
         self.safety.render.zonotope.plan.linestyle = "-"
 
         self.safety.render.zonotope.backup_plan.color = "green"
         self.safety.render.zonotope.backup_plan.linewidth = 1.0
+        self.safety.render.zonotope.backup_plan.alpha = 0.1
         self.safety.render.zonotope.backup_plan.linestyle = "--"
 
         self.safety.render.zonotope.plans.linewidth = 2.0
