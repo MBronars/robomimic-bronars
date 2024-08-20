@@ -94,15 +94,23 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names,
 
                     # This check if the env_zonotope (directly reading the robot geometry form sim)
                     # collides with the forward_occupancy result using link_zonotopes
-                    FRS  = policy.backup_policy.get_arm_zonotopes_at_q(
-                          q                 = policy.backup_policy.to_tensor(obs["robot0_joint_pos"]),
-                          T_frame_to_base   = obs["T_world_to_base"]
+                    FO_arm  = policy.backup_policy.get_arm_zonotopes_at_q(
+                                q                 = policy.backup_policy.to_tensor(obs["robot0_joint_pos"]),
+                                T_frame_to_base   = obs["T_world_to_base"]
+                             )
+                    
+                    T_world_to_arm_base = policy.backup_policy.to_tensor(obs["T_world_to_base"])
+                    T_arm_base_to_gripper_base = policy.backup_policy.fk(obs["robot0_joint_pos"], "right_hand") 
+                    T_world_to_gripper_base = T_world_to_arm_base @ T_arm_base_to_gripper_base
+
+                    FO_gripper = policy.backup_policy.get_gripper_zonotopes_at_q(
+                        q               = policy.backup_policy.to_tensor(obs["robot0_gripper_qpos"]),
+                        T_frame_to_base = T_world_to_gripper_base
                     )
 
-                    # FRS  = policy.backup_policy.get_forward_occupancy_from_plan(
-                    #         plan              = policy._backup_plan,
-                    #         T_world_to_base   = obs["T_world_to_base"]
-                    # )
+                    FRS = []
+                    # FRS.extend(FO_arm)
+                    FRS.extend(FO_gripper)
 
                     for cam_name in camera_names:
                         video_img.append(

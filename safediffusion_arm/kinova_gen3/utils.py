@@ -116,7 +116,8 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
     # backup_policy = ArmtdPlanner(action_config = backup_controller_config, 
     #                              **config.safety)
     backup_policy = ArmtdPlannerXML(action_config = backup_controller_config,
-                                    robot_name = "Kinova3", 
+                                    robot_name = "Kinova3",
+                                    gripper_name = "robotiq_gripper_85",
                                     **config.safety)
     
     if policy_type == "diffusion":

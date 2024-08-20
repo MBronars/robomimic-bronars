@@ -1,6 +1,7 @@
 import os
 import math
 from copy import deepcopy
+from collections import deque
 
 import torch
 import numpy as np
@@ -18,6 +19,7 @@ from safediffusion.algo.helper import traj_uniform_acc, ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.utils.npy_utils import scale_array_from_A_to_B
 import safediffusion.utils.robot_utils as RobotUtils
+import safediffusion.utils.reachability_utils as ReachUtils
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -26,53 +28,64 @@ if use_zonopy:
 else: 
     from safediffusion.armtdpy.reachability.conSet import zonotope, batchZonotope, polyZonotope
 
+JOINT_VEL_LIMIT = dict(kinova3 = [1.3963, 1.3963, 1.3963, 1.3963, 1.2218, 1.2218, 1.2218])
+
 class ArmtdPlanner(ParameterizedPlanner):
-    """
-    Armtd-style of planner for the manipulator robot
-    """
     def __init__(self, 
                  action_config, 
                  robot_name   = "Kinova3",
+                 gripper_name = None,
+                 dt           = 0.01,
+                 t_f          = 1,
+                 time_pieces  = [0.5],
                  **kwargs):
-        
+        """
+        Armtd-style planner for the arm robot
+
+        Args:
+            action_config (dict): the configuration for the action to the environment
+
+        TODO: inputting action_config is awkward. Refactor later.
+        """
         # prepare the useful variables for robot configuration, joint limits, reachable sets
-        self.dimension  = 3
+        self.dimension    = 3
+        self.robot_name   = robot_name
+        self.gripper_name = gripper_name
+        self.time_pieces  = time_pieces
+        self.n_links = self.get_robot_n_links()
 
-        # load robot configuration
-        self.robot_name = robot_name
-        self.load_robot_n_links(self.robot_name)
-
-        # Trajectory design
+        # State and Parameter Definition
         state_dict = {f"q{joint_id}": joint_id for joint_id in range(self.n_links)}
         param_dict = {f"kv{joint_id}": joint_id for joint_id in range(self.n_links)}
         param_dict.update({f"ka{joint_id}": joint_id + self.n_links for joint_id in range(self.n_links)})
 
-        # Timing
-        dt         = 0.01 # planning time interval
-        t_f        = 1.0  # planning horizon
-
         ParameterizedPlanner.__init__(self, state_dict, param_dict, dt, t_f, **kwargs)
 
         # robot configuration
-        self.load_robot_config_and_joint_limits(self.robot_name)
-        self.load_robot_link_zonotopes(self.robot_name)
+        self.load_robot_config_and_joint_limits()
+        self.load_robot_link_zonotopes()
         self.load_joint_reachable_set()
+        if self.gripper_name is not None:
+            self.load_gripper_config(self.gripper_name)
 
         # load zonotope configuration
         self.zono_order = kwargs["zonotope"]["order"]
         self.max_combs  = kwargs["zonotope"]["max_comb"]
         self.combs      = self.generate_combinations_upto(self.max_combs)
 
-        # piecewise trajectory design
-        self.time_pieces = [0.5]
-
         # trajectory optimization
         self.opt_dim     = range(self.n_links, 2*self.n_links)
         self.weight_dict = dict(qpos_goal = 0.0, qpos_projection = 0.0)
 
-        # Environment configuration
-        self.t_cur = 0
+        # Environment action configuration
+        self.t_cur         = 0
         self.action_config = action_config
+
+        # FUTUREPROOFING
+        # TODO: for each constraint tag, implement prepare_data, compute_constraint
+        # TODO: for each objective tag, implement prepare_data, compute_objective
+        # self.register_constraints(["robot_collision", "joint_position", "joint_velocity", "gripper_collision"])
+        # self.register_objectives(["qpos_goal", "qpos_projection", "eef_goal"])
 
     # ---------------------------------------------- #
     # Loading the robot configurations
@@ -81,6 +94,8 @@ class ArmtdPlanner(ParameterizedPlanner):
     def load_joint_reachable_set(self):
         """
         Load offline-computed joint reachable set
+
+        TODO: vel_lim should be parsed from the offline JRS config
         """
         # load pre-computed joint reachable set
         self.JRS_tensor = self.to_tensor(preload_batch_JRS_trig())
@@ -91,26 +106,38 @@ class ArmtdPlanner(ParameterizedPlanner):
         self.FRS_info   = {"delta_k": torch.hstack((delta_kv, delta_ka))}
 
     
-    def load_robot_link_zonotopes(self, robot_name):
+    def load_robot_link_zonotopes(self):
         """
         Load the zonotope representations of the given `robot_name`
 
         TODO: unify link_zono and link_polyzono later
         """
         # load the robot arm zonotopes
-        robot_model              = Arm_3D(robot_name)
+        robot_model              = Arm_3D(self.robot_name)
+
         self._link_zonos_stl     = robot_model._link_zonos
         self._link_polyzonos_stl = robot_model.link_zonos
         
     
-    def load_robot_n_links(self, robot_name):
+    def get_robot_n_links(self, robot_name):
         """
         Load the number of the links given the robot name
+
+        Args:
+            robot_name (str): the name of the robot
+        
+        Returns:
+            n_links (int): the number of the links
         """
-        robot_model    = Arm_3D(robot_name)
-        self.n_links = robot_model.n_links # number of links (without gripper)        
+        robot_model = Arm_3D(robot_name)
+        n_links     = robot_model.n_links # number of links (without gripper)     
+
+        return n_links   
     
-    def load_robot_config_and_joint_limits(self, robot_name):
+    def load_gripper_config(self, gripper_name):
+        raise NotImplementedError
+    
+    def load_robot_config_and_joint_limits(self):
         """
         Cache the robot information, mainly referencing Arm_3D library (armtdpy/environments/robots)
 
@@ -118,7 +145,7 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         TODO: Find TODO notes below
         """
-        robot_model    = Arm_3D(robot_name)
+        robot_model    = Arm_3D(self.robot_name)
 
         # robot configuration specifications
         self.params  = {'n_joints' : self.n_links,
@@ -202,7 +229,6 @@ class ArmtdPlanner(ParameterizedPlanner):
             return x, dx, grad_to_optvar
         
         else:
-
             return x, dx
 
     def get_pstate_from_obs(self, obs_dict):
@@ -444,7 +470,20 @@ class ArmtdPlanner(ParameterizedPlanner):
         qpos             = self.to_tensor(obs_dict["robot0_joint_pos"])
         qvel             = self.to_tensor(obs_dict["robot0_joint_vel"])
 
+        # Original
+        # data["robot_collision"] = self._prepare_constraint_robot_collision(
+        #                                     qpos            = qpos, 
+        #                                     qvel            = qvel, 
+        #                                     obstacles       = obs_dict["zonotope"]["obstacles"],
+        #                                     T_world_to_base = obs_dict["T_world_to_base"])
+        
+        
         # Constraint 1: collision b/w robot arm - {objects, arena, mount}
+        # obstacles = []
+        # obstacles.extend(obs_dict["zonotope"]["static_obs"]) # mount, arena
+        # obstacles.extend(obs_dict["zonotope"]["non_active_object"])
+        # obstacles.extend(obs_dict["zonotope"]["active_object"])
+
         data["robot_collision"] = self._prepare_constraint_robot_collision(
                                             qpos            = qpos, 
                                             qvel            = qvel, 
@@ -454,11 +493,20 @@ class ArmtdPlanner(ParameterizedPlanner):
         # Constraint 2: joint position/velocity constraint
         data["joint"]  = dict(n_con = 2*(3*self.n_pos_lim + self.n_links))
 
-        # Constraint 4: collision b/w robot gripper - {non-active object, arena, mount}
+        # Constraint 3: collision b/w robot gripper - {non-active object, arena, mount}
+        # if self.gripper_name is not None:
+        #     obstacles = []
+        #     obstacles.extend(obs_dict["zonotope"]["static_obs"]) # mount, arena
+        #     obstacles.extend(obs_dict["zonotope"]["non_active_object"])
+        #     data["active_obj_collision"] = self._prepare_constraint_gripper_collision(
+        #                                         qpos            = qpos, 
+        #                                         qvel            = qvel, 
+        #                                         obstacles       = obstacles,
+        #                                         T_world_to_base = obs_dict["T_world_to_base"])
         
-        # Constraint 5: collision b/w robot gripper outside - {active objet}
+        # Constraint 4: collision b/w robot gripper outside - {active objet}
 
-        # Constraint 6: self-collision
+        # Constraint 5: self-collision
 
         return data
     
@@ -472,6 +520,7 @@ class ArmtdPlanner(ParameterizedPlanner):
             qvel: (n_link, 1), joint velocity of the robot
             obstacles: list <zonotope>: the list of zonotope representation for the objects, arena, mounts
             T_world_to_base: (4, 4), the transformation matrix from world to the robot_base
+            use_gripper: (bool), use gripper for collision check
 
         Returns:
             data: dict,
@@ -507,6 +556,58 @@ class ArmtdPlanner(ParameterizedPlanner):
         )
 
         return data
+    
+    def _prepare_constraint_gripper_collision(self, qpos, qvel, obstacles, T_world_to_base):
+        """
+        Prepare the constraints data for collision-check of robot arms (w/o gripper) and 
+        objects / mount / arena.
+
+        Args:
+            qpos: (n_link, 1), joint position of the robot
+            qvel: (n_link, 1), joint velocity of the robot
+            obstacles: list <zonotope>: the list of zonotope representation for the non-active objects, arena, mounts
+            T_world_to_base: (4, 4), the transformation matrix from world to the robot_base
+
+        Returns:
+            data: dict,
+                    (A, b) Ax <= b H-polytopee representation
+                    FO_links: (n_link, 1) list of polyzonotope representation of the all possible volumes of each link
+        
+        TODO
+        """
+        # robot forward occupancy
+        _, R_trig         = process_batch_JRS_trig(self.JRS_tensor, qpos, qvel, self.joint_axes)
+        link_polyzonos    = [pz.to(dtype=self.dtype, device=self.device) for pz in self._link_polyzonos_stl]
+        FO_links,_, _     = forward_occupancy(R_trig, link_polyzonos, self.params, T_world_to_base=T_world_to_base)
+
+        # TODO: transform it to the gripper
+        # FO_gripper_links  = 
+        # n_gripper_links   = len(FO_gripper_links)
+
+        # obstacle zonotope
+        n_obs     = len(obstacles)
+
+        # constraint data
+        # the robot link should not intersect the obstacles for all time horizon
+        n_interval = self.n_timestep - 1
+
+        A = np.zeros((n_gripper_links,n_obs),dtype=object)
+        b = np.zeros((n_gripper_links,n_obs),dtype=object)
+        for (j, FO_gripper_link) in enumerate(FO_gripper_links):
+            for (i, obstacle) in enumerate(obstacles):
+                obs_Z    = einops.repeat(obstacle.Z, 'm n -> repeat m n', repeat=n_interval)
+                A_o, b_o = batchZonotope(torch.cat((obs_Z, FO_gripper_link.Grest),-2)).polytope(self.combs) # A: n_timesteps,*,dimension  
+                A[j, i]  = A_o.cpu()
+                b[j, i]  = b_o.cpu()
+        
+        data = dict(
+            A_obs            = A,
+            b_obs            = b,
+            FO_gripper_links = FO_gripper_links,
+            n_con            = n_obs * n_gripper_links * n_interval
+        )
+
+        raise NotImplementedError
 
     def _compute_constraints(self, x, problem_data):
         """
@@ -520,23 +621,71 @@ class ArmtdPlanner(ParameterizedPlanner):
         meta_data = problem_data["meta"]
         qpos      = meta_data["state"][:self.n_links]
         qvel      = meta_data["state"][self.n_links:]
+
+        cdata = problem_data["constraint"]
         
         # Constraint - Initialization
         ka   = einops.repeat(self.to_tensor(x), 'n -> repeat n', repeat=n_interval) * self.FRS_info["delta_k"][self.opt_dim]
+        Cons_list = []
+        Jac_list = []
 
         # C1 - joint constraint
         Cons_joint, Jac_joint_to_ka = self._compute_joint_constraints(ka=ka[0], qpos=qpos, qvel=qvel)
+        Cons_list.append(Cons_joint); Jac_list.append(Jac_joint_to_ka)
 
         # C2 - robot arm collision constraint
-        Cons_rc, Jac_rc_to_ka = self._compute_robot_collision_constraints(ka   = ka, 
-                                                                          data = problem_data["constraint"]["robot_collision"])
-
-        # transform it back with respect to x
-        Cons       = torch.hstack((Cons_joint, Cons_rc))
-        Jac_to_ka  = torch.vstack((Jac_joint_to_ka, Jac_rc_to_ka))
-        Jac_to_x   = Jac_to_ka * self.FRS_info["delta_k"][self.opt_dim]
+        Cons_rc, Jac_rc_to_ka = self._compute_robot_collision_constraints(ka = ka, data = cdata["robot_collision"])
+        Cons_list.append(Cons_rc); Jac_list.append(Jac_rc_to_ka)
+        
+        # C3 - gripper collision constraint
+        # if self.gripper_name is not None:
+        #     Cons_gc, Jac_gc_to_ka = self._compute_gripper_collision_constraints(ka = ka, data = cdata["gripper_collision"])
+        #     Cons_list.append(Cons_gc); Jac_list.append(Jac_gc_to_ka)
+        
+        # Vectorizing
+        Cons      = torch.hstack(Cons_list)
+        Jac_to_ka = torch.vstack(Jac_list)
+        Jac_to_x  = Jac_to_ka * self.FRS_info["delta_k"][self.opt_dim]
 
         return Cons, Jac_to_x
+    
+    def _compute_gripper_collision_constraints(self, ka, data):
+        """
+        Gripper collision constraint
+        """
+        """
+        Robot arm collision constraint
+        """
+        T = self.n_timestep - 1
+        M = data["n_con"] # number of constraints
+        
+        FO_links = data["FO_gripper_links"]
+        A_obs    = data["A_obs"]
+        b_obs    = data["b_obs"]
+        N        = b_obs.shape[0]
+        n_obs    = b_obs.shape[1]
+
+        Cons     = torch.zeros(M, dtype = self.dtype)
+        Jac      = torch.zeros(M, N, dtype = self.dtype)
+
+        beta = ka/self.FRS_info["delta_k"][self.opt_dim]
+        for (l, FO_link) in enumerate(FO_links):
+            c_k      = FO_link.center_slice_all_dep(beta)
+            grad_c_k = FO_link.grad_center_slice_all_dep(beta)
+            for o in range(n_obs):
+                # constraint: max(Ax - b) <= 0
+                h_obs = (A_obs[l][o]@c_k.unsqueeze(-1)).squeeze(-1) - b_obs[l][o]
+                h_obs = h_obs.nan_to_num(-torch.inf)
+                cons, ind = torch.max(h_obs, -1) # shape: n_timsteps, SAFE if >=1e-6 
+
+                # gradient of the constraint
+                A_max     = A_obs[l][o].gather(-2, ind.reshape(T, 1, 1).repeat(1, 1, self.dimension)) 
+                grad_cons = (A_max@grad_c_k).squeeze(-2) # shape: n_timsteps, n_links safe if >=1e-6
+
+                Cons[(l + N*o)*T:(l + N*o + 1)*T] = - cons
+                Jac[(l + N*o)*T:(l + N*o + 1)*T]  = - grad_cons
+        
+        return Cons, Jac
 
     def _compute_robot_collision_constraints(self, ka, data):
         """
@@ -628,28 +777,6 @@ class ArmtdPlanner(ParameterizedPlanner):
         Jac  = torch.vstack((grad_qvel_ub, grad_qvel_lb, grad_qpos_ub, grad_qpos_lb))
 
         return Cons, Jac
-    
-    def collision_check(self, plan, obs):
-        """
-        Discrete collision checking algorithm.
-
-        It checks the collision by intersecting the robot zonotopes at each planning time steps with
-        the obstacles zonotopes.
-
-        Args
-            plan: ReferenceTrajectory torch array (qpos)
-            obs: observation dictionary
-
-        Returns
-            is_collision: bool
-
-        NOTE: This could be accelerated using batch zonotope
-        """
-        assert isinstance(plan, ReferenceTrajectory), "The plan should be the instance of ReferenceTrajectory"
-        assert "zonotope" in obs.keys() and "robot" in obs["zonotope"].keys() and "obstacle" in obs["zonotope"].keys()
-        robot_zonotope = obs["zonotope"]["robot"][0]
-        assert(torch.allclose(robot_zonotope.center, plan[0][1]+self.offset, 1e-6), 
-               "The plan is not consistent with the current position")
 
     def collision_check(self, plan, obs):
         assert isinstance(plan, ReferenceTrajectory), "The plan should be the instance of ReferenceTrajectory"
@@ -692,17 +819,10 @@ class ArmtdPlanner(ParameterizedPlanner):
                         return True
         
         return False
-
+    
     # ---------------------------------------------- #
-    # Helper
+    # Action configuration
     # ---------------------------------------------- #
-    def wrap_cont_joint_to_pi(self, phases):
-        if len(phases.shape) == 1:
-            phases = phases.unsqueeze(0)
-        phases_new = torch.clone(phases)
-        phases_new[:,~self.lim_flag] = (phases[:,~self.lim_flag] + torch.pi) % (2 * torch.pi) - torch.pi
-        return phases_new
-
     def get_action(self, obs_dict, goal_dict = None):
         """
         Get action that can be sent to the environment
@@ -742,7 +862,16 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         return action
 
+    # ---------------------------------------------- #
+    # Helper Functions
+    # ---------------------------------------------- #
+    def wrap_cont_joint_to_pi(self, phases):
+        if len(phases.shape) == 1:
+            phases = phases.unsqueeze(0)
+        phases_new = torch.clone(phases)
+        phases_new[:,~self.lim_flag] = (phases[:,~self.lim_flag] + torch.pi) % (2 * torch.pi) - torch.pi
 
+        return phases_new
 
     def rot(self, q):
         """
@@ -785,6 +914,14 @@ class ArmtdPlanner(ParameterizedPlanner):
             arm_zonos.append(arm_zono)
         
         return arm_zonos
+
+    def get_gripper_zonotopes_at_q(self, q):
+        """
+        Return the forward occupancy of the gripper with the zonotopes
+
+        It does by doing the forward kinematics of the gripper
+        """
+        raise NotImplementedError
     
     def get_eef_pos_at_q(self, q, T_frame_to_base):
         """
@@ -842,32 +979,40 @@ class ArmtdPlanner(ParameterizedPlanner):
         return FO_link
 
 class ArmtdPlannerXML(ArmtdPlanner):
+    """
+    Armtd Planner where the robot model is loaded using xml file.
+    """
     def __init__(self,
                  action_config, 
-                 robot_name,
+                 robot_name = "Kinova3",
+                 gripper_name = None,
                  **kwargs):
         
         self.robot_xml_file       = os.path.join(robosuite.__path__[0], 
                                                  f"models/assets/robots/{robot_name.lower()}/robot.xml")
-        self.joint_vel_limit_dict = dict(
-            kinova3 = [1.3963, 1.3963, 1.3963, 1.3963, 1.2218, 1.2218, 1.2218]
-        )
         
+        if gripper_name is not None:
+            self.gripper_xml_file     = os.path.join(robosuite.__path__[0], 
+                                                    f"models/assets/grippers/{gripper_name.lower()}.xml")
+                
+        assert robot_name.lower() in JOINT_VEL_LIMIT.keys(), f"The joint velocity limit of {robot_name} has not been registered."
         assert os.path.exists(self.robot_xml_file)
 
-        super().__init__(action_config, robot_name, **kwargs)
+        super().__init__(action_config, 
+                         robot_name   = robot_name, 
+                         gripper_name = gripper_name, 
+                         **kwargs)
 
-    def load_robot_n_links(self, robot_name):
+    def get_robot_n_links(self):
         params = RobotUtils.load_single_mujoco_robot_arm_params(self.robot_xml_file)
-        self.n_links = params['n_joints']
+        n_links = params['n_joints']
 
-    def load_robot_config_and_joint_limits(self, robot_name):
+        return n_links
+
+    def load_robot_config_and_joint_limits(self):
         """
         Read the params (n_joints, P, R, joint_axes) from the robosuite xml file
         """
-        assert robot_name.lower() in self.joint_vel_limit_dict.keys(), \
-            f"The joint velocity limit of {robot_name} has not been registered."
-        
         # parse parameters from the xml file
         
         params = RobotUtils.load_single_mujoco_robot_arm_params(self.robot_xml_file)
@@ -890,7 +1035,7 @@ class ArmtdPlannerXML(ArmtdPlanner):
         self.n_pos_lim      = int(sum(self.lim_flag))
 
         # joint velocity limit
-        self.vel_lim        = self.to_tensor(self.joint_vel_limit_dict[robot_name.lower()])
+        self.vel_lim        = self.to_tensor(JOINT_VEL_LIMIT[self.robot_name.lower()])
 
     def _process_pos_lim(self, pos_lim):
         """
@@ -914,5 +1059,129 @@ class ArmtdPlannerXML(ArmtdPlanner):
         pos_lim_processed = self.to_tensor(torch.stack(pos_lim_processed))
 
         return pos_lim_processed
+    
+    def load_robot_link_zonotopes(self):
+        """
+        Load robot link zonotopes by parsing it from the xml file
+
+        TODO: Here, if the gripper is not None, add the gripper zonotopes
+        """
+        self.arm_parser = RobotUtils.RobotXMLParser(self.robot_xml_file, dtype = self.dtype, device = self.device)
+        arm_link_zonos_stl       = self.get_arm_link_zonos(self.arm_parser.root_node, 
+                                                           exclude_base = True, 
+                                                           exclude_eef  = True)
+        self._link_zonos_stl     = [link_zonos[0] for link_zonos in arm_link_zonos_stl] # exclude "base" and "right hand"
+        self._link_polyzonos_stl = [link_zono.to_polyZonotope() for link_zono in self._link_zonos_stl]
+
+    def get_arm_link_zonos(self, root, exclude_base = False, exclude_eef = False):
+        """
+        Args:
+            root (TreeNode)
+        
+        Returns:
+            
+        """
+        link_zonos = []
+        
+        if root is None:
+            return link_zonos
+        
+        queue = deque([root])
+
+        while queue:
+            current_node = queue.popleft()
+
+            # insert action here
+            link_zono = [g["zonotope"] for g in current_node.geom_info if g["zonotope"] is not None]
+
+            link_zonos.append(link_zono)
+
+            # Enqueue all children of the current node
+            for child in current_node.children:
+                queue.append(child)
+        
+        if exclude_base:
+            link_zonos = link_zonos[1:]
+
+        if exclude_eef:
+            link_zonos = link_zonos[:-1]
+
+        return link_zonos
+
+    def get_arm_zonotopes_at_q(self, q, T_frame_to_base):
+        """
+        Get zonotope representation of the arm at the given joint angle q
+
+        Args:
+            q (torch.tensor) (n_joint,) the query joint angle
+            T_frame_to_base ()
+        """
+
+        arm_zonos = self.arm_parser.forward_kinematics_zono(q)
+
+        rot = T_frame_to_base[:3, :3]
+        pos = T_frame_to_base[:3, -1]
+
+        arm_zonos = [ReachUtils.transform_zonotope(zono, pos=pos, rot=rot)
+                     for zono in arm_zonos]
+
+        return arm_zonos
+    
+    def get_gripper_zonotopes_at_q(self, q, T_frame_to_base):
+        """
+        Get zonotope representation of the arm at the given joint angle q
+
+        Args:
+            q (torch.tensor) (n_joint,) the query joint angle
+            T_frame_to_base ()
+        """
+
+        gripper_zonos = self.gripper_parser.forward_kinematics_zono(q)
+
+        rot = T_frame_to_base[:3, :3]
+        pos = T_frame_to_base[:3, -1]
+
+        gripper_zonos = [ReachUtils.transform_zonotope(zono, pos=pos, rot=rot)
+                            for zono in gripper_zonos]
+
+        return gripper_zonos
+    
+    def fk(self, q, name):
+        """
+        Get the pose of the link name of name at joint angle q
+        """
+        q = self.to_tensor(q)
+        R, p = self.arm_parser.forward_kinematics(q, name)
+
+        T = torch.eye(4)
+        T[:3, :3] = R
+        T[:3, -1] = p
+        
+        return T
+
+    def load_gripper_config(self, gripper_name):
+        """
+        TODO: write a code that parses the relative P, R from the base, link zonotopes
+
+        Assumes there exists only binary status for the gripper: closed & open
+        """
+        self.gripper_parser = RobotUtils.RobotXMLParser(self.gripper_xml_file, 
+                                                        base_name = "robotiq_85_adapter_link",
+                                                        dtype = self.dtype,
+                                                        device = self.device)
+
+        gripper_qpos_closed = np.array([-0.026, -0.267, -0.200, -0.026, -0.267, -0.200])
+        # self.gripper_parser.forward_kinematics(self.to_tensor(gripper_qpos_closed))
+        # self.get_gripper_zonotopes_at_q(gripper_qpos_closed)
+
+
+
+        # self._open_gripper_zonos_stl = # TODO
+        # self._open_gripper_polyzonos_stl = # TODO (refer to Arm3D to convert zonos into polyzonos)
+
+        # self._closed_gripper_zonos_stl = # TODO
+        # self._closed_gripper_polyzonos_stl = # TODO (refer to Arm3D to convert zonos into polyzonos)
+        
+        # raise NotImplementedError
 
         

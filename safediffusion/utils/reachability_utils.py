@@ -36,6 +36,26 @@ def transform_zonotope(zono, pos, rot):
 
     return zonotope(Z_new)
 
+def scale_zonotope(zono, scale):
+    """
+    Scale 3D zonotope
+    """
+    assert isinstance(zono, zonotope) and zono.dimension == 3
+    assert scale.shape[0] == 3
+    
+    c = zono.center
+    G = zono.generators
+    S = torch.diag(torch.tensor(scale)).to(dtype=zono.dtype, device=zono.device)
+    
+    G_new = S@G
+    Z_new = np.vstack([c, G_new])
+    
+    Z_new = torch.asarray(Z_new)
+
+    return zonotope(Z_new)
+
+    
+
 def plot_zonos(zonos):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -203,6 +223,7 @@ def get_mesh_vertices_from_stl_file(stl_file):
     """
     # Load the STL file
     stl_mesh = mesh.Mesh.from_file(stl_file)
+    
     
     # Extract vertices directly, avoiding reshaping for better performance on large meshes
     vertices = stl_mesh.vectors
