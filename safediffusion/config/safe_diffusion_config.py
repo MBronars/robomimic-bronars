@@ -22,6 +22,7 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
 
         # trajectory optimization
         self.safety.trajopt.verbose = False
+        self.safety.trajopt.nlp_time_limit = 3.0
         
         # render configuration
         self.safety.render.save_dir = None
@@ -70,5 +71,6 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
 
         self.safety.render.zonotope.plans.linewidth = 2.0
         self.safety.render.zonotope.plans.linestyle = "-"
+        self.safety.render.zonotope.plans.alpha = 0.4
 
         

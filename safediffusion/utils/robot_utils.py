@@ -206,8 +206,8 @@ def parse_body(body, params, Tj, K, actuator_map, meshes_map, xml_file):
             elif geom_type == "box":
                 geom_size = geom.get('size')
                 zonotope = ReachUtils.get_zonotope_from_box_geom(pos  = torch.zeros(3,), 
-                                                                    rot  = torch.eye(3), 
-                                                                    size = geom_size)
+                                                                 rot  = torch.eye(3), 
+                                                                 size = geom_size)
             else:
                 raise NotImplementedError
             
@@ -326,6 +326,8 @@ class RobotXMLParser:
 
         Args:
             xml_file (str): Path to the XML file to parse.
+
+        TODO: Unify the searching method, implement DFS, and Kinematic-DFS (which is slightly different)
         """
         self.xml_file = xml_file
         self.tree = ET.parse(xml_file)
@@ -343,9 +345,12 @@ class RobotXMLParser:
         if base_body is not None:
             self.root_node = self._parse_body(base_body)
         
-        self.n_joint      = self.get_n_joint()
-        self.joint_axes   = self.get_joint_axes()
-        self.rot_skew_sym = self.get_rot_skew_sym()
+        self.n_joint        = self.get_n_joint()
+        self.joint_axes     = self.get_joint_axes()
+        self.rot_skew_sym   = self.get_rot_skew_sym()
+        self.link_zonos_stl = self.get_link_zonos_stl()
+        self.rot_params     = self.get_relative_rot()
+        self.pos_params     = self.get_relative_pos()
 
     def to_tensor(self, x):
         if type(x) == torch.Tensor:
@@ -381,11 +386,9 @@ class RobotXMLParser:
         if geom_type == "mesh":
             mesh_key  = geom_data["mesh"]
             mesh_scale = self.meshes_map[mesh_key].get("scale")
-            mesh_scale = self.to_tensor(list(map(float, mesh_scale.split()))) if mesh_scale is not None else None
+            mesh_scale = np.array(list(map(float, mesh_scale.split()))) if mesh_scale is not None else None
             mesh_file = os.path.join(os.path.dirname(self.xml_file), self.meshes_map[mesh_key].get('file'))
-            zonotope = ReachUtils.get_zonotope_from_stl_file(stl_file = mesh_file)
-            if mesh_scale is not None:
-                zonotope = ReachUtils.scale_zonotope(zonotope, scale = mesh_scale)
+            zonotope = ReachUtils.get_zonotope_from_stl_file(stl_file = mesh_file, mesh_scale = mesh_scale)
 
         elif geom_type == "box":
             geom_size = geom_data["size"]
@@ -489,6 +492,8 @@ class RobotXMLParser:
                     geom_data = {
                         'type': geom_type,
                         'name': geom.get('name'),
+                        'pos' : list(map(float, geom.get('pos').split())) if geom.get('pos') is not None else [0, 0, 0],
+                        'quat': list(map(float, geom.get('quat').split())) if geom.get('quat') is not None else [1, 0, 0, 0],
                         'mesh': geom.get('mesh') if geom_type == "mesh" else None,
                         'size': list(map(float, geom.get('size').split())) if geom_type == "box" else None
                     }
@@ -510,29 +515,82 @@ class RobotXMLParser:
         """
         return self.root_node
     
-    def get_joint_axes(self):
+    # --------------------------------------- #
+    # Tree Traversal Method
+    # --------------------------------------- #
+    def bfs_apply(self, action):
         """
-        Get the joint axes using BFS
-        """
-        joint_axes = []
+        Perform BFS traversal and apply the given action at each node.
         
+        Args:
+            action (function): A function to be applied to each node. It should accept a node as input.
+        
+        Returns:
+            result: Result of applying action to the nodes.
+        """
+        result = []
         queue = deque([self.root_node])
 
         while queue:
             current_node = queue.popleft()
-
-            # insert action here
-            if current_node.joint_info:
-                joint_axes.append(current_node.joint_info["axis"])
+            # Apply the action to the current node
+            action_result = action(current_node)
+            if action_result is not None:
+                result.append(action_result)
 
             # Enqueue all children of the current node
             for child in current_node.children:
                 queue.append(child)
-        
-        joint_axes = torch.tensor(joint_axes)
 
-        return joint_axes
+        return result
     
+    def preorder_apply(self, action):
+        """
+        Perform Preorder traversal and apply the given action at each node.
+        
+        Args:
+            action (function): A function to be applied to each node. It should accept a node as input.
+        
+        Returns:
+            result: Result of applying action to the nodes.
+        """
+        result = []
+
+        def _preorder_traversal(node):
+            if not node:
+                return
+            # Apply the action to the current node
+            action_result = action(node)
+            if action_result is not None:
+                result.append(action_result)
+            
+            # Recursively traverse all children in preorder
+            for child in node.children:
+                _preorder_traversal(child)
+
+        _preorder_traversal(self.root_node)
+        return result
+    
+    # ------------------------------------- #
+    # Getter function using Searching Method
+    # ------------------------------------- #
+    
+    def get_joint_axes(self):
+        """
+        Get the joint axes using preorder traversal.
+
+        The joint angles are stored in the order of preorder traversal in MJCF file.
+        """
+        def action(node):
+            if node.joint_info:
+                return node.joint_info["axis"]
+            return None
+        
+        joint_axes = self.preorder_apply(action)
+        joint_axes = torch.tensor(joint_axes)
+        
+        return joint_axes
+
     def get_rot_skew_sym(self):
         w = torch.tensor([[[0,0,0],[0,0,1],[0,-1,0]],
                             [[0,0,-1],[0,0,0],[1,0,0]],
@@ -541,10 +599,45 @@ class RobotXMLParser:
 
         return rot_skew_sym
     
+    def get_link_zonos_stl(self):
+        """
+        Get the link zonotopes using BFS
+        """
+        def action(node):
+            if node.geom_info:
+                return [g["zonotope"] for g in node.geom_info]
+            return None
+
+        link_zonos = self.preorder_apply(action)
+        return link_zonos
+    
     def get_n_joint(self):
         joint_axes = self.get_joint_axes()
         return joint_axes.shape[0]
     
+    def get_relative_pos(self):
+        """
+        Get the relative positions using BFS
+        """
+        def action(node):
+            return node.pos
+        
+        pos_list = self.preorder_apply(action)
+        return pos_list
+    
+    def get_relative_rot(self):
+        """
+        Get the relative positions using BFS
+        """
+        def action(node):
+            return node.rot
+        
+        rot_list = self.preorder_apply(action)
+        return rot_list
+    
+    # -----------------------------------
+    # Simple Kinematics (that depends on joint angle)
+    # -----------------------------------
     def rot(self, q):
         q = q.reshape(q.shape+(1,1))
         W = self.rot_skew_sym
@@ -589,7 +682,11 @@ class RobotXMLParser:
             
             if node.geom_info:
                 for geom in node.geom_info:
-                    zonotope = Ri @ geom['zonotope'] + Pi
+                    zonotope = geom['zonotope']
+                    zonotope = ReachUtils.transform_zonotope(zonotope, 
+                                                             pos = np.array(geom['pos']), 
+                                                             rot = quaternion_to_rotation_matrix(geom['quat']))
+                    zonotope = Ri @ zonotope + Pi
                     self.arm_zonos.append(zonotope)
 
             # Recursively process each child node
@@ -599,6 +696,7 @@ class RobotXMLParser:
             return joint_index
 
         # Initialize rotation and position based on the root node
+        q  = self.to_tensor(q)
         Ri = self.to_tensor(torch.eye(3))
         Pi = self.to_tensor(self.root_node.pos)
         self.arm_zonos = []

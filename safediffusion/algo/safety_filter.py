@@ -124,7 +124,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         """
         pass
 
-    def initialize_backup_plan(self, ob, goal):
+    def initialize_backup_plan(self, ob, goal=None):
         """
         Initialize the backup plan from the initial state of the environment
 
@@ -151,7 +151,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         
         if count == self.max_init_attempts:
             self.stuck = True
-    
+
     def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         """
         Monitor the safety of the head plan and compute the backup plan if necessary
@@ -180,19 +180,24 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
 
         return info
     
-    def compute_backup_plan(self, plan, ob, goal):
+    def compute_backup_plan(self, plan, ob, goal = None):
         """ 
-        Compute the backup plan from the initial state of the tail plan.
-        This does by projecting the plan to the safe parameterized trajectory.
-        It returns backup plan in (ReferenceTrajectory) if exists. If not, it returns None.
+        Return the plan and optimization information by solving the backup trajectory optimization (TO).
         
         Args:
-            plan: (ReferenceTrajectory) The reference plan to compute the backup plan
+            plan: (ReferenceTrajectory): The reference plan to compute the backup plan
+                - If `plan` is None, it computes the backup plan attached at the current state, parsed from `ob`.
+                - If `plan` is not None, it computes the backup plan attached at the initial state of the `plan`.
+            ob   (dict): observation dictionary
+            goal (dict): goal dictionary
         
         Returns:
-            backup_plan
-        """
+            backup_plan (ReferenceTrajectory): The backup plan
+            info (dict): information dictionary for TO
 
+        TODO: This function is very confusing right now. Change it later (e.g., decouple plan = None mode)
+              Each function in this function is not right-away to notice.
+        """
         ob_backup, goal_backup = self.process_dicts_for_backup_policy(ob=ob, goal=goal, plan=plan)
 
         self.update_backup_policy_weight()
@@ -218,13 +223,13 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def process_dicts_for_backup_policy(self, ob, goal, plan):
+    def process_dicts_for_backup_policy(self, ob, goal=None, plan=None):
         """
         Given the plan, observation dictionary, and goal dictionary from the environment (Safety Wrapper)
         preprocess the data to be compatible with the backup policy
 
         Args
-            plan : ReferenceTrajectory object
+            plan : ReferenceTrajectory object, plan from the nominal policy
             ob   : observation dictionary
             goal : goal dictionary
         
@@ -237,7 +242,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         raise NotImplementedError
     
     @abc.abstractmethod
-    def get_plan_from_nominal_policy(self, ob, goal):
+    def get_plan_from_nominal_policy(self, ob, goal=None):
         """
         Get the plan from the nominal policy
 
@@ -351,7 +356,7 @@ class SafeDiffusionPolicy(SafetyFilter):
     """
     Diffusion-specific algorithms (e.g., guiding)
     """    
-    def rank_plans(plans, obs, goal):
+    def rank_plans(plans, obs, goal=None):
         """
         Rank the plans based on the safety and performance criteria
 

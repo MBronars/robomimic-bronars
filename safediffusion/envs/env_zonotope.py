@@ -4,17 +4,18 @@ from enum import Enum
 
 import torch
 import numpy as np
+import matplotlib.cm as cm
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 from PIL import Image, ImageDraw
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy: 
-    from zonopy.contset import zonotope
+    from zonopy.contset import zonotope, batchZonotope
 else: 
-    from safediffusion.armtdpy.reachability.conSet import zonotope
-import safediffusion.utils.reachability_utils as reach_utils
+    from safediffusion.armtdpy.reachability.conSet import zonotope, batchZonotope
+import safediffusion.utils.reachability_utils as ReachUtils
 import safediffusion.utils.list_utils as ListUtils
 from safediffusion.envs.env_safety import SafetyEnv
 
@@ -118,7 +119,7 @@ class ZonotopeEnv(SafetyEnv):
         robot_mask = self.geom_table["robot"]
         dynamic_obs_mask = self.geom_table["dynamic_obs"]
         update_mask = robot_mask | dynamic_obs_mask
-        self.geom_table.loc[update_mask, "zonotope"] = [reach_utils.transform_zonotope(
+        self.geom_table.loc[update_mask, "zonotope"] = [ReachUtils.transform_zonotope(
                                                             zono = self.geom_table["zonotope_primitive"][geom_id],
                                                             pos  = mjdata.geom_xpos[geom_id],
                                                             rot  = mjdata.geom_xmat[geom_id].reshape(3, 3)
@@ -161,19 +162,19 @@ class ZonotopeEnv(SafetyEnv):
 
         # Get Zonotope Primitive (ZP)
         if geom_type == GeomType.PLANE.value:
-            ZP = reach_utils.get_zonotope_from_plane_geom(pos=zero, rot=eye, size=geom_size)
+            ZP = ReachUtils.get_zonotope_from_plane_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.SPHERE.value:
-            ZP = reach_utils.get_zonotope_from_sphere_geom(pos=zero, rot=eye, size=geom_size)
+            ZP = ReachUtils.get_zonotope_from_sphere_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.CYLINDER.value:
-            ZP = reach_utils.get_zonotope_from_cylinder_geom(pos=zero, rot=eye, size=geom_size)
+            ZP = ReachUtils.get_zonotope_from_cylinder_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.BOX.value:
-            ZP = reach_utils.get_zonotope_from_box_geom(pos=zero, rot=eye, size=geom_size)
+            ZP = ReachUtils.get_zonotope_from_box_geom(pos=zero, rot=eye, size=geom_size)
         elif geom_type == GeomType.MESH.value:
             mesh_id = mjmodel.geom_dataid[geom_id]
             vert_start = mjmodel.mesh_vertadr[mesh_id]
             vert_count = mjmodel.mesh_vertnum[mesh_id]
             vertices = mjmodel.mesh_vert[vert_start:vert_start + vert_count].reshape(-1, 3)
-            ZP = reach_utils.get_zonotope_from_mesh_vertices(vertices=vertices)
+            ZP = ReachUtils.get_zonotope_from_mesh_vertices(vertices=vertices)
         else:
             print(f"Geom type {geom_type} is not supported yet.")
             raise NotImplementedError("Not Implemented")
@@ -195,11 +196,11 @@ class ZonotopeEnv(SafetyEnv):
         geom_pos = mjdata.geom_xpos[geom_id]
         geom_rot = mjdata.geom_xmat[geom_id].reshape(3, 3)
 
-        Z = reach_utils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
+        Z = ReachUtils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
 
         return Z
 
-    # TODO: start from here. replace get_zonotope_from_geom_id, refactor reach_utils
+    # TODO: start from here. replace get_zonotope_from_geom_id, refactor ReachUtils
 
 
     
@@ -229,22 +230,22 @@ class ZonotopeEnv(SafetyEnv):
         
     #     # Get Zonotope Primitive (ZP)
     #     if geom_type == GeomType.PLANE.value:
-    #         ZP = reach_utils.get_zonotope_from_plane_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #         ZP = ReachUtils.get_zonotope_from_plane_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
     #     elif geom_type == GeomType.SPHERE.value:
-    #         ZP = reach_utils.get_zonotope_from_sphere_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #         ZP = ReachUtils.get_zonotope_from_sphere_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
     #     elif geom_type == GeomType.CYLINDER.value:
-    #         ZP = reach_utils.get_zonotope_from_cylinder_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #         ZP = ReachUtils.get_zonotope_from_cylinder_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
     #     elif geom_type == GeomType.BOX.value:
-    #         ZP = reach_utils.get_zonotope_from_box_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
+    #         ZP = ReachUtils.get_zonotope_from_box_geom(pos=geom_pos, rot=geom_rot, size=geom_size)
     #     elif geom_type == GeomType.MESH.value:
     #         mesh_id = mjmodel.geom_dataid[geom_id]
     #         vert_start = mjmodel.mesh_vertadr[mesh_id]
     #         vert_count = mjmodel.mesh_vertnum[mesh_id]
     #         vertices = mjmodel.mesh_vert[vert_start:vert_start + vert_count].reshape(-1, 3)
-    #         ZP = reach_utils.get_zonotope_from_mesh_vertices(vertices=vertices)
+    #         ZP = ReachUtils.get_zonotope_from_mesh_vertices(vertices=vertices)
 
     #         # TODO: register ZP only and transform to get the representation
-    #         # ZP = reach_utils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
+    #         # ZP = ReachUtils.transform_zonotope(ZP, pos = geom_pos, rot = geom_rot)
     #     else:
     #         print(f"Geom type {geom_type} is not supported yet.")
     #         raise NotImplementedError("Not Implemented")
@@ -329,7 +330,7 @@ class ZonotopeEnv(SafetyEnv):
         Draw the 3D zonotope on the plot
 
         Args:
-            zonotopes (list): list of zonotopes
+            zonotopes (list): list of zonotopes / batchzonotopes
             color (str): color of the zonotope
             alpha (float): transparency of the zonotope
             linewidth (float): width of the line
@@ -339,6 +340,7 @@ class ZonotopeEnv(SafetyEnv):
             patch_data (list): list of vertices of the zonotopes
         """
         zonotopes = ListUtils.maybe_flatten_the_list(zonotopes)
+        zonotopes = ReachUtils.maybe_flatten_the_zonotope(zonotopes)
 
         patch_data = torch.vstack([zonotope.polyhedron_patch() for zonotope in zonotopes])
 
@@ -421,6 +423,32 @@ class ZonotopeEnv(SafetyEnv):
                                                         self.render_setting[name]["alpha"],
                                                         self.render_setting[name]["linewidth"])
 
+    def draw_multitraj3D_in_kwargs_if_exists(self, kwargs, name):
+        """
+        Draw the multiple trajectory of name `name` at the figure canvas
+        """
+        if name in kwargs.keys() and kwargs[name] is not None:
+            # Remove existing plot if any
+            if self.plots[name] is not None:
+                for line in self.plots[name]:
+                    line.remove()
+            
+            # Generate a colormap
+            colormap = plt.cm.get_cmap('tab10', len(kwargs[name]))
+            
+            self.plots[name] = []
+            # Plot each trajectory with a different color
+            for i in range(len(kwargs[name])):
+                color = colormap(i / len(kwargs[name]))
+                line, = self.ax.plot(kwargs[name][i][:, 0], 
+                                     kwargs[name][i][:, 1], 
+                                     kwargs[name][i][:, 2], 
+                                     color     = color, 
+                                     linewidth = self.render_setting[name]["linewidth"],
+                                     linestyle = self.render_setting[name]["linestyle"],
+                                     alpha     = self.render_setting[name]["alpha"])
+                self.plots[name].append(line)
+
     def draw_traj3D_in_kwargs_if_exists(self, kwargs, name):
         """
         Draw the trajectory of name `name` at the figure canvas
@@ -429,14 +457,43 @@ class ZonotopeEnv(SafetyEnv):
         if name in kwargs.keys() and kwargs[name] is not None:
             if self.plots[name] is not None:
                 self.plots[name][0].remove()
-            self.plots[name] = self.ax.plot(
-                kwargs[name][:, 0], 
-                kwargs[name][:, 1], 
-                kwargs[name][:, 2], 
-                color=self.render_setting[name]["color"], 
-                linewidth=self.render_setting[name]["linewidth"],
-                linestyle=self.render_setting[name]["linestyle"]
-            )
+
+            color = self.render_setting[name]["color"]
+
+            if color == "gradient":
+                # Extract the trajectory points
+                points = kwargs[name]
+                
+                # Create segments from the points for the Line3DCollection
+                segments = np.array([points[i:i+2] for i in range(len(points)-1)])
+                
+                # Define a color map (e.g., viridis)
+                cmap = cm.get_cmap('viridis')
+                
+                # Normalize the segments for color mapping
+                norm = plt.Normalize(0, len(segments))
+                colors = cmap(norm(np.arange(len(segments))))
+                
+                # Create a Line3DCollection with the segments and corresponding colors
+                lc = Line3DCollection(segments, 
+                                      colors    = colors, 
+                                      linewidth = self.render_setting[name]["linewidth"], 
+                                      linestyle = self.render_setting[name]["linestyle"])
+                
+                # Add the Line3DCollection to the axis
+                self.ax.add_collection(lc)
+                self.plots[name] = [lc]
+            
+            else:
+                self.plots[name] = self.ax.plot(
+                    kwargs[name][:, 0], 
+                    kwargs[name][:, 1], 
+                    kwargs[name][:, 2], 
+                    color=self.render_setting[name]["color"], 
+                    linewidth=self.render_setting[name]["linewidth"],
+                    linestyle=self.render_setting[name]["linestyle"]
+                )
+            
 
     def custom_render(self, mode=None, height=None, width=None, camera_name="agentview", **kwargs):
         """Renders the environment as 3D zonotope world.

@@ -522,8 +522,6 @@ class DiffusionPolicyUNet(PolicyAlgo):
         return actions
         
 
-
-
     def deserialize(self, model_dict):
         """
         Load model from a checkpoint.

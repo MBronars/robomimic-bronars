@@ -8,12 +8,7 @@ class SafePickPlaceEnv(SafeArmEnv):
 
     Add observation "T_world_to_base", "state_dict" to the SafeArmEnv
     """
-    def __init__(self, env, init_active_object = "milk", **kwargs):
-        """
-        init_active_object_id: the id of initial object to grasp
-        """
-        self.active_object    = init_active_object
-        
+    def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
 
         self.gripper_innerpad_geoms = []
@@ -34,27 +29,84 @@ class SafePickPlaceEnv(SafeArmEnv):
             "backup_plan"   : None,
             "goal"          : None,
         })
+
+    # -------------------------------------------------------- #
+    # Abstract functions to override (EnvBase)
+    # -------------------------------------------------------- #
+    def get_goal(self):
+        """
+        Get goal observation
+
+        TODO: Add the goal eef pose
+        1. If the robot is at the <reach> phase, return the grasping pose
+        2. If the robot is at the <place> phase, return the target bin pose
+        """
+        goal_dict = super().get_goal()
+        
+        if hasattr(self, 'active_object'):
+            active_object_zonotope = self.geom_table.loc[self.geom_table["active_object"], "zonotope"].iloc[0]
+            goal_dict["grasp_pos"] = np.array(active_object_zonotope.center)
+        
+        return goal_dict
     
+    def set_goal(self, object_name=None, **kwargs):
+        """
+        Get goal observation
+
+        TODO: Add the goal eef pose
+        1. If the robot is at the <reach> phase, return the grasping pose of the active object
+        2. If the robot is at the <place> phase, return the target bin pose of the active object
+        """
+        _ = super().set_goal(**kwargs)
+
+        if object_name is not None:
+            self.active_object = object_name
+            self.geom_table    = self.update_active_object_in_geom_table(self.geom_table)
+        
+        return self.get_goal()
+
     def get_observation(self, obs=None):
         """
-        PickPlace 
+        Postprocesses the `get_observation` from SafeArmEnv
+
+        1. state_dict (dict): this is HACK: we need this for the perfect prediction
+        2. zonotope
+            active_object
+            non_active_object
+            static_obstacle
+
+        NOTE (CAUTION) keep the notion of static_obs and dynamic_obs
         """
         obs = super().get_observation(obs)
 
-        # add the transform between the world to the robot base
-        mjdata = self.unwrapped_env.sim.data
-        
-        T_world_to_base           = np.zeros((4, 4))
-        T_world_to_base[0:3, 0:3] = mjdata.get_body_xmat("robot0_base")
-        T_world_to_base[0:3, 3]   = mjdata.get_body_xpos("robot0_base")
-        T_world_to_base[3, 3]     = 1
-
-        obs["T_world_to_base"]    = T_world_to_base 
-        # HACK
+        # 1 HACK
         obs["state_dict"]         = self.get_state()
 
-        return obs
+        # 2 zonotope
+        obs["zonotope"]["active_object"]     = list(self.geom_table["zonotope"][self.geom_table["active_object"]])
+        obs["zonotope"]["non_active_object"] = list(self.geom_table["zonotope"][self.geom_table["dynamic_obs"] 
+                                                                                & ~ self.geom_table["active_object"]])
+        obs["zonotope"]["static_obs"]        = list(self.geom_table["zonotope"][self.geom_table["static_obs"]])
 
+        # 3 grasping info
+        obs["grasping"] = self.is_grasping()
+
+        return obs
+    
+    # -------------------------------------------- #
+    # Updater functions
+    # -------------------------------------------- #
+    
+    def _sync(self):
+        """
+        Synchronize the geometry table information
+        """
+        super()._sync()
+        self.geom_table = self.update_active_object_in_geom_table(self.geom_table)
+
+    # -------------------------------------------- #
+    # Abstract functions for SafetyEnv
+    # -------------------------------------------- #
     
     def is_safe(self):
         """
@@ -80,6 +132,8 @@ class SafePickPlaceEnv(SafeArmEnv):
         
         NOTE: This safety specification is imagining that `place` phase does not require
         smooth placing. User can add extra safety specifications
+
+        NOTE: this function should not change any internal status
         """
         
         # pointer to mjmodel
@@ -218,15 +272,32 @@ class SafePickPlaceEnv(SafeArmEnv):
         that belongs to the active object
         """
         geom_table = super().create_geom_table()
-
-        active_object_id   = self.unwrapped_env.object_to_id[self.active_object.lower()]
-        active_object_name = self.unwrapped_env.obj_names[active_object_id]
-        active_geom_id     = self.unwrapped_env.obj_geom_id[active_object_name]
-        
-        geom_table['active_object'] = geom_table.index.isin(active_geom_id)
+        geom_table = self.update_active_object_in_geom_table(geom_table)
 
         return geom_table
+    
+    def update_active_object_in_geom_table(self, geom_table):
+        """
+        Updates the active_object mask in the geom_table
 
+        Args:
+            geom_table (pd.Dataframe)
+        
+        Returns:
+            updated_geom_table
+        """
+        if hasattr(self, 'active_object'):
+            active_object_id   = self.unwrapped_env.object_to_id[self.active_object.lower()]
+            active_object_name = self.unwrapped_env.obj_names[active_object_id]
+            active_geom_id     = self.unwrapped_env.obj_geom_id[active_object_name]
+            
+            geom_table['active_object'] = geom_table.index.isin(active_geom_id)
+
+        return geom_table
+    
+    # --------------------------------------------- #
+    # Renderer
+    # --------------------------------------------- #
     def custom_render(self, mode=None, height=None, width=None, camera_name=None, **kwargs):
         """
         Custom renderer function for PickPlaceEnv
@@ -246,6 +317,7 @@ class SafePickPlaceEnv(SafeArmEnv):
         # extra argument trajectory
         self.draw_traj3D_in_kwargs_if_exists(kwargs, "plan")
         self.draw_traj3D_in_kwargs_if_exists(kwargs, "backup_plan")
+        self.draw_multitraj3D_in_kwargs_if_exists(kwargs, "plans")
         
         self.adjust_camera(camera_name)
 
@@ -268,7 +340,11 @@ class SafePickPlaceBreadEnv(SafePickPlaceEnv):
     This environment is created only to override the notion of success.
     """
     def __init__(self, env, **kwargs):
-        super().__init__(env, init_active_object="bread", **kwargs)
+        """
+        Initially sets the object to grasp as the "bread"
+        """
+        super().__init__(env, **kwargs)
+        self.set_goal(object_name = "bread")
     
     def is_success(self):
         """

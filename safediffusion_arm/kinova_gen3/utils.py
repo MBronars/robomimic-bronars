@@ -16,7 +16,7 @@ from safediffusion.utils.rand_utils import set_random_seed
 from safediffusion.envs.env_safety import SafetyEnv
 
 from safediffusion_arm.environments.safe_pickplace_env import SafePickPlaceBreadEnv
-from safediffusion_arm.algo.planner_arm import ArmtdPlanner, ArmtdPlannerXML
+from safediffusion_arm.algo.planner_arm_xml import ArmtdPlannerXML
 from safediffusion_arm.algo.predictor_arm import ArmEnvSimStatePredictor
 from safediffusion_arm.algo.safety_filter_arm import SafeDiffusionPolicyArm, IdentityDiffusionPolicyArm, IdentityBackupPolicyArm
 
@@ -62,18 +62,18 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                                          device    = device, 
                                                          verbose   = True)
     
-    # override the action horizon
-    policy.policy.algo_config.horizon.unlock_keys()
-    policy.policy.algo_config.horizon["action_horizon"] = config.safety.filter.n_head
-    policy.policy.algo_config.horizon.lock_keys()
-
-    # maybe further override the policy setting
+    # maybe override the policy setting
     if policy_kwargs is not None:
         for k, v in policy_kwargs.items():
             policy.policy.algo_config[k].unlock_keys()
             for vk, vv in v.items():
                 policy.policy.algo_config[k][vk] = vv
             policy.policy.algo_config[k].lock_keys()
+    
+    # override the action horizon
+    policy.policy.algo_config.horizon.unlock_keys()
+    policy.policy.algo_config.horizon["action_horizon"] = config.safety.filter.n_head
+    policy.policy.algo_config.horizon.lock_keys()
 
     # maybe override the environment setting
     if env_kwargs is not None:
@@ -119,6 +119,7 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                     robot_name = "Kinova3",
                                     gripper_name = "robotiq_gripper_85",
                                     **config.safety)
+    backup_policy.calibrate(env_safe)
     
     if policy_type == "diffusion":
         policy_wrapped  = IdentityDiffusionPolicyArm(
@@ -141,7 +142,14 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                         **config.safety)
         
     elif policy_type == "backup":
-        raise NotImplementedError("Backup policy is not implemented yet.")
+        policy_wrapped  = IdentityBackupPolicyArm(
+                                rollout_policy = policy,
+                                backup_policy  = backup_policy,
+                                dt_action      = dt_action,
+                                predictor      = predictor,
+                                rollout_controller_name = "OSC_POSE",
+                                backup_controller_name  = "JOINT_POSITION",
+                                **config.safety)
     
     else:
         raise ValueError(f"Unknown policy type: {policy_type}")

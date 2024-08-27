@@ -9,9 +9,6 @@ from robomimic.utils.obs_utils import unnormalize_dict
 from safediffusion.algo.plan import ReferenceTrajectory
 from safediffusion.algo.safety_filter import SafeDiffusionPolicy
 
-from safediffusion.utils.npy_utils import scale_array_from_A_to_B
-
-
 class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
     def __init__(self, 
                  rollout_policy, 
@@ -30,10 +27,11 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         super().__init__(rollout_policy, backup_policy, dt_action=dt_action, **config)
 
         # object for state prediction
-        # TODO: Make this as a third-party object whose `predict(init_state, actions)` returns the state predictions
-        self.predictor = predictor
+        self.predictor               = predictor
+
+        # TODO: check that it is a valid controller name
         self.rollout_controller_name = rollout_controller_name
-        self.backup_controller_name = backup_controller_name
+        self.backup_controller_name  = backup_controller_name
 
         # internal status
         self.action_idx = 0
@@ -45,7 +43,7 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
     def safety_critical_state_keys(self):
         return ["robot0_joint_pos", "robot0_joint_vel"]
     
-    def __call__(self, ob, goal=None, **kwargs):
+    def __call__(self, ob, goal = None, **kwargs):
         """
         Main entry point of our receding-horizon safety filter.
 
@@ -60,21 +58,52 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         """
         # if there is no backup plan, the agent is static, initialize the backup plan.
         if self.has_no_backup_plan():
-            self.initialize_backup_plan(ob, goal)
+            self.initialize_backup_plan(ob = ob, goal = goal)
             self.action_idx = 0
 
         # for every period (`self.n_head`), update the nominal plan and backup plan
         # at time t, compute new plan t..t+Ta, and decide which strategy to take for next Ta horizon
+        if self.stuck:
+            return None, None
+        
         if self.action_idx % self.n_head == 0:    
-            self.update(ob, goal, **kwargs)
+            self.update(ob = ob, goal = goal, **kwargs)
             self.action_idx = 0
 
         # get action that can be sent to robomimic env.
-        ac, controller_to_use = self.get_action(ob)
+        ac, controller_to_use = self.get_action(ob = ob)
         self.action_idx  += 1
 
         return ac, controller_to_use
     
+    def initialize_backup_plan(self, ob, goal = None):
+        super().initialize_backup_plan(ob = ob, goal = goal)
+
+        if self.stuck:
+            count = 0
+            while count < self.max_init_attempts:
+                count = count + 1
+                backup_plan = self.random_explore_backup_plan(ob = ob, goal = goal)
+                if backup_plan is not None:
+                    self.set_backup_plan(backup_plan)
+                    self.stuck = False
+                    break
+    
+    def random_explore_backup_plan(self, ob, goal = None):
+        self.disp("Randomly Exploring")
+
+        k_opt = 0.01 * torch.randn(len(self.backup_policy.opt_dim),)
+        
+        problem_data = self.backup_policy._prepare_problem_data(obs_dict = ob, goal_dict=dict())
+        Cons, Jac = self.backup_policy.compute_constraints(k_opt, problem_data)
+
+        if np.max(Cons) < 0:
+            plan = self.backup_policy.make_plan(ob, k_opt)
+        else:
+            plan = None
+        
+        return plan
+
     def pop_backup_plan(self, horizon):
         """
         Pop the backup plan for the amount of the horizon
@@ -84,11 +113,12 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         
         # update the remaining backup plan
         self._backup_plan = self._backup_plan[self._backup_plan.t_des >= horizon]
-        self._backup_plan.set_start_time(0)
+        if len(self._backup_plan) > 0:
+            self._backup_plan.set_start_time(0)
         
         return plan
     
-    def update(self, ob, goal, **kwargs):
+    def update(self, ob, goal = None, **kwargs):
         (plan, actions) = self.get_plan_from_nominal_policy(ob, goal, **kwargs)
         info            = self.monitor_and_compute_backup_plan(plan, ob, goal)
 
@@ -116,9 +146,20 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
     
 
     def get_action(self, ob):
+        """
+        The safety filter for arm. If intervened, use the backup policy to generate the action.
+        Else, use the nominal policy to generate the action.
+
+        For the gripper action, 
+            if the gripper is grasping object, keep it closed.
+            if the gripper is not grasping object, keep current gripper status
+        """
         if self.intervened:
             # using backup planner
-            action_gripper = self.nominal_actions[self.action_idx, -1]
+            if ob['grasping']:
+                action_gripper = 1
+            else:
+                action_gripper = -1
             action_arm     = self.backup_policy.get_action_from_plan_at_t(
                 t_des    = (self.action_idx+1) * self.dt_action,
                 plan     = self.backup_plan_cur,
@@ -133,24 +174,7 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         
         return action, controller_to_use
     
-    def update_backup_policy_weight(self):
-        """
-        Update the weight dictionary of the backup policy according to the internal status.
-        This function reflects the strategy of the objective of the backup planner.
-
-        NOTE: If the policy is stucked, change to the goal mode
-        TODO: Check if all keys of the weight dict is in the backup planner
-        """
-        weight_dict = dict(qpos_goal       = 1.0, 
-                           qpos_projection = 0.0)
-
-        # check that we configured all the objectives of backup policy
-        for key in self.backup_policy_weight_keys:
-            assert key in weight_dict.keys()
-        
-        self.backup_policy.update_weight(weight_dict)
-    
-    def get_plan_from_nominal_policy(self, obs, goal=None, num_samples=1):
+    def get_plan_from_nominal_policy(self, obs, goal = None, num_samples = 1):
         """
         Get the plan from the nominal policy
 
@@ -181,11 +205,15 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         plans_candidates = self.predictor(init_states, actions_candidates)
 
         # TODO: Ranking the plans
-        # best_plan, best_plan_idx, ranking_info = self.rank_plans(plans_candidates, obs, goal)
-        # best_actions = actions_candidates[best_plan_idx]
-        # self.ranking_info = ranking_info
+        if num_samples > 1:
+            best_plan, best_plan_idx, ranking_info = self.rank_plans(plans_candidates, obs, goal)
+            best_actions = actions_candidates[best_plan_idx]
+            self.ranking_info = ranking_info
+        else:
+            best_plan = plans_candidates[0]
+            best_actions = actions_candidates[0]
         
-        return plans_candidates[0], actions_candidates[0]
+        return best_plan, best_actions
         
     def postprocess_to_actions(self, reference_traj, ob):
         """
@@ -212,61 +240,89 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         collision = self.backup_policy.collision_check(plan, ob)
         return not collision
     
-    def process_dicts_for_backup_policy(self, ob, goal, plan=None):
+    def process_dicts_for_backup_policy(self, ob, goal = None, plan = None):
         """
         Given the plan, observation dictionary, and goal dictionary from the environment,
         preprocess the data to be compatible with the backup policy
 
         Args
-            ob   : observation dictionary
-            goal : goal dictionary
-            plan : ReferenceTrajectory object (optional)
+            ob   (dict)                : observation dictionary, state should be where that we attach backup plan
+            goal (dict)                : goal dictionary
+            plan (ReferenceTrajectory) : plan from the nominal policy
         
         Returns
-            obs_dict : observation dictionary
-            goal_dict: goal dictionary where goal_dict[backup_planner.objective_tag] = dict()
+            obs_dict  (dict): observation dictionary
+            goal_dict (dict): goal dictionary where goal_dict[backup_planner.objective_tag] = dict()
 
         # TODO: Since the safety filter is the wrapper of the backup policy, it would be good if we can parse the
         #       available objective function keys from the backup policy
+        
+        # NOTE 1: robot zonotope is not used unlike the SafeMazeEnv
+        # NOTE 2: does not consider the EnvStackWrapper for this code
         """
         assert plan is None or isinstance(plan, ReferenceTrajectory)
 
-        obs_dict  = deepcopy(ob)
-        goal_dict = deepcopy(goal)
+        obs_dict_processed  = deepcopy(ob)
+        goal_dict_processed = deepcopy(goal) if goal is not None else dict()
 
-        if goal_dict is None:
-            goal_dict = {}
+        attach_backup_plan_at_current_obs = (plan is None)
 
-        initialize_mode = (plan is None)
-
-        if initialize_mode:
+        # Process observation dictionary
+        if attach_backup_plan_at_current_obs:
             # When there is no nominal plan available, compute the backup plan starting at current state
             for key in self.safety_critical_state_keys:
-                if obs_dict[key].ndim == 2:
-                    obs_dict[key] = ob[key][-1, :]
+                if obs_dict_processed[key].ndim == 2:
+                    obs_dict_processed[key] = ob[key][-1, :]
 
         else:
             # When nominal plan is available, compute the backup plan at the initial state of the nominal plan
-            # TODO
-            # 1) robot_zonotope is not used, hence not updated in this code. Refer to safemaze if we need
-            # 2) does not consider envstackwrapper
-            obs_dict["robot0_joint_pos"] = plan[0][1]
-            obs_dict["robot0_joint_vel"] = plan[0][2]
+            obs_dict_processed["robot0_joint_pos"] = plan[:1].x_des.squeeze()
+            obs_dict_processed["robot0_joint_vel"] = plan[:1].dx_des.squeeze()
 
-            # update goal dictionary to provide info. about the objective function
-            # HACK
-            # goal_dict["qpos_goal"]       = dict(qgoal=torch.zeros(7,))
-            goal_dict["qpos_goal"]       = dict(qgoal=torch.tensor([ torch.pi/2, -torch.pi/2, torch.pi/4, 0, 0, 0, 0]))
-            goal_dict["qpos_goal"]       = dict(qgoal=torch.tensor([-torch.pi/2, -torch.pi/2, torch.pi/4, 0, 0, 0, 0]))
-            goal_dict["qpos_projection"] = dict(plan=plan)
+        # Process goal dictionary
+        if plan is not None:
+            goal_dict_processed["reference_trajectory"] = plan
+        # if 'qpos' in goal.keys():
+        #     goal_dict_processed["joint_pos_goal"]       = dict(goal = self.backup_policy.to_tensor(goal['qpos']))
+        # if 'grasp_pos' in goal.keys():
+        #     goal_dict_processed["grasp_pos_goal"]       = dict(goal = self.backup_policy.to_tensor(goal['grasp_pos']))
+        # if plan is not None:
+        #     goal_dict_processed["joint_pos_projection"] = dict(plan = plan)
 
-            for key in self.backup_policy_weight_keys:
-                assert key in goal_dict.keys(), \
-                f"The objective [{key}] for backup policy should be specified in goal_dict."
+        # for key in self.backup_policy_weight_keys:
+        #     assert key in goal_dict_processed.keys(), \
+        #     f"The objective [{key}] for backup policy should be specified in goal_dict."
 
-        return obs_dict, goal_dict
+        return obs_dict_processed, goal_dict_processed
+    
+    def update_backup_policy_weight(self):
+        """
+        Update the weight dictionary of the backup policy according to the internal status.
+        This function reflects the strategy of the objective of the backup planner.
 
-    def rank_plans(self, plans, obs, goal):
+        NOTE: If the policy is stucked, change to the goal mode
+        TODO: Check if all keys of the weight dict is in the backup planner
+        TODO: Refactor this to update this weight dict to internal status
+        """
+        # weight_dict = dict(joint_pos_goal       = 0.0, 
+        #                    joint_pos_projection = 1.0,
+        #                    grasp_pos_goal       = 0.0)
+
+        # # check that we configured all the objectives of backup policy
+        # for key in self.backup_policy_weight_keys:
+        #     assert key in weight_dict.keys()
+        
+        # self.backup_policy.update_weight(weight_dict)
+        raise NotImplementedError
+    
+    # ------------------------------------------------------ #
+    # Implementation of ranking 
+    # ------------------------------------------------------ #
+    
+    def rank_plans(self, plans, obs, goal = None):
+        """
+        Rank the plans 
+        """
         OBJ_VAL_INIT = 1e4
 
         best_obj_val = OBJ_VAL_INIT
@@ -274,7 +330,11 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         ranking_dict = dict()
         for idx, plan in enumerate(plans):
             tail_plan         = plan[self.n_head:]
-            backup_plan, info = self.compute_backup_plan(tail_plan, obs, goal)
+            # bugfix
+            tail_plan.set_start_time(0)
+            backup_plan, info = self.compute_backup_plan(plan = tail_plan, 
+                                                         ob   = obs, 
+                                                         goal = goal)
 
             is_safe = info["status"] == 0
             obj_val = info["obj_val"]
@@ -315,10 +375,9 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
 
 class IdentityDiffusionPolicyArm(SafeDiffusionPolicyArm):
     """
-    Implementation of the wrapper of the diffusion policy that always returns the actions
-    from the diffusion policy
+    Implementation of the wrapper of the diffusion policy.
     """
-    def monitor_and_compute_backup_plan(self, plan, ob, goal):
+    def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         # fill the dummy info
         info = dict()
 
@@ -332,5 +391,67 @@ class IdentityDiffusionPolicyArm(SafeDiffusionPolicyArm):
         return info
 
 class IdentityBackupPolicyArm(SafeDiffusionPolicyArm):
-    def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
-        raise NotImplementedError
+    """
+    Implementation of the wrapper of the backup planner.
+    """
+    def get_plan_from_nominal_policy(self, ob, goal = None, **kwargs):
+        """
+        Get the plan from the nominal policy
+
+        Args
+            ob   : (B, 1) Observation array
+            goal : (B, 1) Goal array
+        
+        Returns
+            plan   : (B, 1) ReferenceTrajectory array
+            actions: (B, T_p, D_a) np.ndarray
+        """
+        plan, _ = self.compute_backup_plan(plan = None, 
+                                           ob   = ob, 
+                                           goal = goal)
+        info = None
+
+        return plan, info
+
+    def get_action(self, ob):
+        action_gripper = -1
+        
+        if self.intervened:
+            # using backup planner
+            action_arm     = self.backup_policy.get_action_from_plan_at_t(
+                t_des    = (self.action_idx+1) * self.dt_action,
+                plan     = self.backup_plan_cur,
+                obs_dict = ob
+            )
+        else:
+            # using backup planner
+            action_arm     = self.backup_policy.get_action_from_plan_at_t(
+                t_des    = (self.action_idx+1) * self.dt_action,
+                plan     = self.nominal_plan,
+                obs_dict = ob
+            )
+
+        action = np.concatenate([action_arm, [action_gripper]])
+        controller_to_use = self.backup_controller_name
+        
+        return action, controller_to_use
+    
+    def update_backup_policy_weight(self):
+        """
+        Update the weight dictionary of the backup policy according to the internal status.
+        This function reflects the strategy of the objective of the backup planner.
+
+        NOTE: If the policy is stucked, change to the goal mode
+        TODO: Check if all keys of the weight dict is in the backup planner
+        TODO: Refactor this to update this weight dict to internal status
+        """
+        weight_dict = dict(joint_pos_goal       = 1.0, 
+                           joint_pos_projection = 0.0,
+                           grasp_pos_goal       = 0.0)
+
+        # check that we configured all the objectives of backup policy
+        for key in self.backup_policy_weight_keys:
+            assert key in weight_dict.keys()
+        
+        self.backup_policy.update_weight(weight_dict)
+    

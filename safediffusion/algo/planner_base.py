@@ -10,11 +10,13 @@ from safediffusion.algo.plan import ReferenceTrajectory
 
 import einops
 
-class TrajectoryOptimization(object):
+class TrajectoryOptimization(cyipopt.Problem):
     """
     Wrapper class of planner to render the optimization
     """
-    def __init__(self, planner, problem_data, verbose=False):
+    def __init__(self, n, m, lb, ub, cl, cu, planner, problem_data, verbose=False):
+        super().__init__(n = n, m = m, lb = lb, ub = ub, cl = cl, cu = cu)
+
         assert isinstance(planner, ParameterizedPlanner)
         self.planner = planner
         self.problem_data = problem_data
@@ -43,9 +45,9 @@ class TrajectoryOptimization(object):
         Constraints for the trajectory optimization
         """
         Cons, _ = self.planner.compute_constraints(x, self.problem_data)
-        return Cons    
+        return Cons  
     
-    def jacobian (self, x):
+    def jacobian(self, x):
         """
         Jacobian of the constraints
         """
@@ -54,8 +56,31 @@ class TrajectoryOptimization(object):
 
     def intermediate(self, alg_mod, iter_count, obj_value, inf_pr, inf_du, mu, d_norm, regularization_size, alpha_du, alpha_pr, ls_trials):
         """
-        Intermediate callback function
+        Intermediate callback function: This is your debugger function
+        TODO: Study this
+
+        Args:
+            alg_mod (int): 0 (regular), 1 (restoration) 
+            iter_count (int)
+            obj_value (float): the unscaled objective value (NOTE: what is "unscaled"?)
+            inf_pr (float): primal infeasibility at the current point
+            inf_du (float): dual infeasibility at the current point
+            mu (float): the value of the barrier parameter
+            d_norm (float): the infinity norm (max) of the primal step.
+            regularization_size (float): The value of the regularization term for the Hessian of the Lagrangian in the augmented system.
+            alpha_du (float): the step size of the dual variable
+            alpha_pr (float): the step size of the primal variable
+            ls_trials (int): the number of the backtracking line search steps
+
+        NOTE: how do we interpret the "multiplier"
+        self.get_current_iterate()
+            - x (ndarray): (n_optvar, 1) current 
+            - mult_x_L (ndarray): (n_optvar, 1) multiplier for the lower bound, + if active, 0 if non-active
+            - mult_x_U (ndarray): (n_optvar, 1) multiplier for the upper bound
+            - g:
+            - mult_g  : multiplier: (n_cons, 1) multiplier for the constraint
         """
+        
         if self.verbose:
             print(f"Iteration {iter_count}: {obj_value}, Primal Feas {inf_pr}, Dual Feas {inf_du}")
 
@@ -87,7 +112,6 @@ class ParameterizedPlanner(abc.ABC):
                  t_f, 
                  device = torch.device('cpu'),
                  dtype  = torch.float,
-                 nlp_time_limit = 1.0,
                  **kwargs):
 
         self.state_dict = state_dict                             # state dictionary that maps the name to index
@@ -96,17 +120,14 @@ class ParameterizedPlanner(abc.ABC):
         # Timing
         self.dt             = dt                                          # planning time step (sec)
         self.t_f            = t_f                                         # time horizon (sec)
-        self.t_des          = torch.arange(0, self.t_f+self.dt, self.dt)  # planning time vector
-        self.nlp_time_limit = nlp_time_limit        
+        self.t_des          = torch.arange(0, self.t_f+self.dt, self.dt)  # planning time vector  
 
         self.device   = device
         self.dtype    = dtype
 
         # print optimization log
-
-        self.verbose = False
-        if "verbose" in kwargs.keys():
-            self.verbose = kwargs["verbose"]
+        self.verbose        = kwargs["trajopt"]["verbose"]
+        self.nlp_time_limit = kwargs["trajopt"]["nlp_time_limit"]
 
         # weight for the trajectory optimization
         self.weight_dict = {}
@@ -281,19 +302,21 @@ class ParameterizedPlanner(abc.ABC):
                 'multi_x' : the Langrange multipliers associated with the bounds: sensitivity of the objective function w.r.t. the bounds
         """
         problem_data  = self._prepare_problem_data(obs_dict, goal_dict, random_initialization=random_initialization)
-        problem       = TrajectoryOptimization(self, problem_data, verbose=self.verbose)
-        n_optvar      = problem.n_optvar
-        n_constraint  = problem.n_constraint
-        k_0           = problem.x_0
 
-        nlp = cyipopt.Problem(
+        n_optvar      = problem_data["meta"]["n_optvar"]
+        n_constraint  = problem_data["meta"]["n_constraint"]
+        x_0           = problem_data["meta"]["optvar_0"]
+
+        nlp = TrajectoryOptimization(
             n = n_optvar,
             m = n_constraint,
-            problem_obj = problem,
             lb = [-1] * n_optvar,
             ub = [1] * n_optvar,
             cl = [-1e20] * n_constraint,
-            cu = [-1e-6] * n_constraint
+            cu = [-1e-6] * n_constraint,
+            planner = self,
+            problem_data = problem_data,
+            verbose = self.verbose
         )
 
         nlp.add_option('sb', 'yes')
@@ -301,10 +324,10 @@ class ParameterizedPlanner(abc.ABC):
         nlp.add_option('tol', 1e-3)
         nlp.add_option('max_wall_time', self.nlp_time_limit)
         
-        k_opt, info = nlp.solve(k_0.cpu().numpy())
+        x_opt, info = nlp.solve(x_0.cpu().numpy())
 
-        k_opt = torch.tensor(k_opt, device=self.device, dtype=self.dtype)
-        k_opt = k_opt * self.FRS_info["delta_k"][self.opt_dim]
+        x_opt = torch.tensor(x_opt, device=self.device, dtype=self.dtype)
+        k_opt = x_opt * self.FRS_info["delta_k"][self.opt_dim]
 
         self.disp(f"x0: {problem_data['meta']['state']}")
         if info["status"] != 0:

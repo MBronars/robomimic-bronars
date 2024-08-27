@@ -1,15 +1,20 @@
 {
     "algo_name": "safediffusion",
     "safety": {
+        "zonotope":{
+            "order": 2
+        },
         "filter":{
-            "n_head": 10
+            "n_head": 6,
+            "max_init_attempts": 5
         },
         "render":{
             "save_dir":"/home/wjung85/Repo/projects/robomimic-safediffusion/safediffusion_arm/kinova_gen3/exps/add_gripper/",
             "zonotope":{
+                "zoom_factor": 1.8,
                 "FRS":{
                     "color": "green",
-                    "alpha": 0.5
+                    "alpha": 0.2
                 },
                 "robot":{
                     "color": "black",

@@ -1,0 +1,431 @@
+
+============= Initialized Observation Utils with Obs Spec =============
+
+using obs modality: low_dim with keys: ['robot0_joint_pos', 'object']
+using obs modality: rgb with keys: []
+using obs modality: depth with keys: []
+using obs modality: scan with keys: []
+
+============= Loaded Environment Metadata =============
+obs key object with shape (56,)
+obs key robot0_joint_pos with shape (7,)
+[1m[33m[robosuite WARNING] [0mNo private macro file found! (macros.py:53)
+[1m[33m[robosuite WARNING] [0mIt is recommended to use a private macro file (macros.py:54)
+[1m[33m[robosuite WARNING] [0mTo setup, run: python /home/wjung85/Repo/exp/robosuite/robosuite/scripts/setup_macros.py (macros.py:55)
+Created environment with name PickPlace
+Action size is 7
+PickPlace
+{
+    "camera_depths": false,
+    "camera_heights": 84,
+    "camera_widths": 84,
+    "control_freq": 20,
+    "controller_configs": {
+        "control_delta": true,
+        "damping": 1,
+        "damping_limits": [
+            0,
+            10
+        ],
+        "impedance_mode": "fixed",
+        "input_max": 1,
+        "input_min": -1,
+        "interpolation": null,
+        "kp": 150,
+        "kp_limits": [
+            0,
+            300
+        ],
+        "orientation_limits": null,
+        "output_max": [
+            0.05,
+            0.05,
+            0.05,
+            0.5,
+            0.5,
+            0.5
+        ],
+        "output_min": [
+            -0.05,
+            -0.05,
+            -0.05,
+            -0.5,
+            -0.5,
+            -0.5
+        ],
+        "position_limits": null,
+        "ramp_ratio": 0.2,
+        "type": "OSC_POSE",
+        "uncouple_pos_ori": true
+    },
+    "has_offscreen_renderer": true,
+    "has_renderer": false,
+    "ignore_done": true,
+    "render_gpu_device_id": 0,
+    "reward_shaping": false,
+    "robots": [
+        "Panda"
+    ],
+    "use_camera_obs": false,
+    "use_object_obs": true
+}
+
+number of parameters: 6.702516e+07
+
+============= Model Summary =============
+DiffusionPolicyUNet (
+  ModuleDict(
+    (policy): ModuleDict(
+      (obs_encoder): ObservationGroupEncoder(
+          group=obs
+          ObservationEncoder(
+              Key(
+                  name=object
+                  shape=[56]
+                  modality=low_dim
+                  randomizer=None
+                  net=None
+                  sharing_from=None
+              )
+              Key(
+                  name=robot0_joint_pos
+                  shape=[7]
+                  modality=low_dim
+                  randomizer=None
+                  net=None
+                  sharing_from=None
+              )
+              output_shape=[63]
+          )
+      )
+      (noise_pred_net): ConditionalUnet1D(
+        (mid_modules): ModuleList(
+          (0-1): 2 x ConditionalResidualBlock1D(
+            (blocks): ModuleList(
+              (0-1): 2 x Conv1dBlock(
+                (block): Sequential(
+                  (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                  (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                  (2): Mish()
+                )
+              )
+            )
+            (cond_encoder): Sequential(
+              (0): Mish()
+              (1): Linear(in_features=382, out_features=2048, bias=True)
+              (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+            )
+            (residual_conv): Identity()
+          )
+        )
+        (diffusion_step_encoder): Sequential(
+          (0): SinusoidalPosEmb()
+          (1): Linear(in_features=256, out_features=1024, bias=True)
+          (2): Mish()
+          (3): Linear(in_features=1024, out_features=256, bias=True)
+        )
+        (up_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(2048, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(2048, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(512, 512, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(1024, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Upsample1d(
+              (conv): ConvTranspose1d(256, 256, kernel_size=(4,), stride=(2,), padding=(1,))
+            )
+          )
+        )
+        (down_modules): ModuleList(
+          (0): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(7, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(7, 256, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=512, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(256, 256, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (1): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(256, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(256, 512, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 512, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 512, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=1024, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Downsample1d(
+              (conv): Conv1d(512, 512, kernel_size=(3,), stride=(2,), padding=(1,))
+            )
+          )
+          (2): ModuleList(
+            (0): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(512, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+                (1): Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Conv1d(512, 1024, kernel_size=(1,), stride=(1,))
+            )
+            (1): ConditionalResidualBlock1D(
+              (blocks): ModuleList(
+                (0-1): 2 x Conv1dBlock(
+                  (block): Sequential(
+                    (0): Conv1d(1024, 1024, kernel_size=(5,), stride=(1,), padding=(2,))
+                    (1): GroupNorm(8, 1024, eps=1e-05, affine=True)
+                    (2): Mish()
+                  )
+                )
+              )
+              (cond_encoder): Sequential(
+                (0): Mish()
+                (1): Linear(in_features=382, out_features=2048, bias=True)
+                (2): Unflatten(dim=-1, unflattened_size=(-1, 1))
+              )
+              (residual_conv): Identity()
+            )
+            (2): Identity()
+          )
+        )
+        (final_conv): Sequential(
+          (0): Conv1dBlock(
+            (block): Sequential(
+              (0): Conv1d(256, 256, kernel_size=(5,), stride=(1,), padding=(2,))
+              (1): GroupNorm(8, 256, eps=1e-05, affine=True)
+              (2): Mish()
+            )
+          )
+          (1): Conv1d(256, 7, kernel_size=(1,), stride=(1,))
+        )
+      )
+    )
+  )
+)
+
+
+============= Training Dataset =============
+SequenceDataset (
+	path=/home/wjung85/Repo/projects/robomimic-safediffusion/datasets/breadpickplace/franka_bread_final.hdf5
+	obs_keys=('object', 'robot0_joint_pos')
+	seq_length=16
+	filter_key=none
+	frame_stack=1
+	pad_seq_length=True
+	pad_frame_stack=True
+	goal_mode=none
+	cache_mode=none
+	num_demos=100
+	num_sequences=21696
+)
+
+SequenceDataset: normalizing actions...
+  0%|                                                    | 0/99 [00:00<?, ?it/s]100%|########################################| 99/99 [00:00<00:00, 11145.18it/s]
+**************************************************
+Warnings generated by robomimic have been duplicated here (from above) for convenience. Please check them carefully.
+[33mROBOMIMIC WARNING(
+    No private macro file found!
+    It is recommended to use a private macro file
+    To setup, run: python /home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/scripts/setup_macros.py
+)[0m
+**************************************************
+
+  0%|                                                   | 0/100 [00:00<?, ?it/s]  1%|4                                          | 1/100 [00:00<00:54,  1.80it/s]  4%|#7                                         | 4/100 [00:00<00:13,  7.33it/s]  7%|###                                        | 7/100 [00:00<00:07, 11.71it/s] 10%|####2                                     | 10/100 [00:00<00:05, 15.43it/s] 13%|#####4                                    | 13/100 [00:01<00:04, 18.72it/s] 16%|######7                                   | 16/100 [00:01<00:03, 21.57it/s] 19%|#######9                                  | 19/100 [00:01<00:03, 23.02it/s] 22%|#########2                                | 22/100 [00:01<00:03, 24.46it/s] 25%|##########5                               | 25/100 [00:01<00:02, 25.23it/s] 28%|###########7                              | 28/100 [00:01<00:02, 26.24it/s] 31%|#############                             | 31/100 [00:01<00:02, 27.23it/s] 34%|##############2                           | 34/100 [00:01<00:02, 27.48it/s] 37%|###############5                          | 37/100 [00:01<00:02, 27.40it/s] 40%|################8                         | 40/100 [00:01<00:02, 27.87it/s] 43%|##################                        | 43/100 [00:02<00:02, 27.34it/s] 46%|###################3                      | 46/100 [00:02<00:01, 27.10it/s] 49%|####################5                     | 49/100 [00:02<00:01, 27.73it/s] 52%|#####################8                    | 52/100 [00:02<00:01, 27.98it/s] 55%|#######################1                  | 55/100 [00:02<00:01, 28.38it/s] 58%|########################3                 | 58/100 [00:02<00:01, 28.15it/s] 61%|#########################6                | 61/100 [00:02<00:01, 28.58it/s] 64%|##########################8               | 64/100 [00:02<00:01, 28.15it/s] 67%|############################1             | 67/100 [00:02<00:01, 28.60it/s] 70%|#############################4            | 70/100 [00:03<00:01, 27.60it/s] 73%|##############################6           | 73/100 [00:03<00:00, 27.85it/s] 76%|###############################9          | 76/100 [00:03<00:00, 28.12it/s] 79%|#################################1        | 79/100 [00:03<00:00, 28.45it/s] 82%|##################################4       | 82/100 [00:03<00:00, 28.55it/s] 85%|###################################6      | 85/100 [00:03<00:00, 28.52it/s] 88%|####################################9     | 88/100 [00:03<00:00, 28.79it/s] 91%|######################################2   | 91/100 [00:03<00:00, 27.91it/s] 94%|#######################################4  | 94/100 [00:03<00:00, 28.13it/s] 97%|########################################7 | 97/100 [00:03<00:00, 28.59it/s]100%|#########################################| 100/100 [00:04<00:00, 27.79it/s]100%|#########################################| 100/100 [00:04<00:00, 24.35it/s]
+Train Epoch 1
+{
+    "Loss": 0.5035974500328302,
+    "Optimizer/policy0_lr": 0.0001,
+    "Policy_Grad_Norms": 3.7561006443275278,
+    "Time_Data_Loading": 0.025938395659128824,
+    "Time_Epoch": 0.06844783226648966,
+    "Time_Log_Info": 0.008617854118347168,
+    "Time_Process_Batch": 0.0003278334935506185,
+    "Time_Train_Batch": 0.03346904516220093
+}
+video writes to /home/wjung85/Repo/projects/robomimic-safediffusion/diffusion_policy_trained_models/breadpickplace/SafetyDiffuser_actions_only/20240825003648/videos/PickPlace_epoch_1.mp4
+rollout: env=PickPlace, horizon=100, use_goals=False, num_episodes=50
+  0%|                                                                                                                                         | 0/50 [00:00<?, ?it/s]  2%|##5                                                                                                                              | 1/50 [00:01<01:22,  1.67s/it]  4%|#####1                                                                                                                           | 2/50 [00:03<01:11,  1.48s/it]  6%|#######7                                                                                                                         | 3/50 [00:04<01:05,  1.40s/it]  8%|##########3                                                                                                                      | 4/50 [00:05<01:02,  1.36s/it] 10%|############9                                                                                                                    | 5/50 [00:06<01:00,  1.34s/it] 12%|###############4                                                                                                                 | 6/50 [00:08<00:58,  1.34s/it] 14%|##################                                                                                                               | 7/50 [00:09<00:56,  1.32s/it] 16%|####################6                                                                                                            | 8/50 [00:10<00:55,  1.32s/it] 18%|#######################2                                                                                                         | 9/50 [00:12<00:54,  1.33s/it] 20%|#########################6                                                                                                      | 10/50 [00:13<00:53,  1.33s/it] 22%|############################1                                                                                                   | 11/50 [00:14<00:51,  1.33s/it] 24%|##############################7                                                                                                 | 12/50 [00:16<00:50,  1.33s/it] 26%|#################################2                                                                                              | 13/50 [00:17<00:49,  1.32s/it] 28%|###################################8                                                                                            | 14/50 [00:18<00:47,  1.31s/it] 30%|######################################4                                                                                         | 15/50 [00:20<00:45,  1.31s/it] 32%|########################################9                                                                                       | 16/50 [00:21<00:44,  1.32s/it] 34%|###########################################5                                                                                    | 17/50 [00:22<00:43,  1.32s/it] 36%|##############################################                                                                                  | 18/50 [00:24<00:41,  1.31s/it] 38%|################################################6                                                                               | 19/50 [00:25<00:40,  1.31s/it] 38%|################################################6                                                                               | 19/50 [00:25<00:41,  1.34s/it]
+run failed with error:
+Error: resource not found via provider or OS filesystem: '/home/wjung85/Repo/exp/robosuite/robosuite/models/assets/robots/panda/obj_meshes/link3_vis/link3_vis_0.obj'
+
+Traceback (most recent call last):
+  File "robomimic/scripts/train.py", line 513, in main
+    important_stats = train(config, device=device, auto_remove_exp=args.auto_remove_exp)
+  File "robomimic/scripts/train.py", line 296, in train
+    all_rollout_logs, video_paths = TrainUtils.rollout_with_stats(
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/utils/train_utils.py", line 486, in rollout_with_stats
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/utils/train_utils.py", line 334, in run_rollout
+  File "/home/wjung85/Repo/projects/robomimic-safediffusion/robomimic/envs/env_robosuite.py", line 138, in reset
+  File "/home/wjung85/Repo/exp/robosuite/robosuite/environments/base.py", line 252, in reset
+  File "/home/wjung85/Repo/exp/robosuite/robosuite/environments/base.py", line 230, in _initialize_sim
+  File "/home/wjung85/Repo/exp/robosuite/robosuite/utils/binding_utils.py", line 1072, in from_xml_string
+ValueError: Error: resource not found via provider or OS filesystem: '/home/wjung85/Repo/exp/robosuite/robosuite/models/assets/robots/panda/obj_meshes/link3_vis/link3_vis_0.obj'
+

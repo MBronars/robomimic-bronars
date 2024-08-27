@@ -5,6 +5,7 @@ from robosuite.controllers.controller_factory import SwitchingController
 
 from safediffusion.envs.env_safety import Geom
 from safediffusion.envs.env_zonotope import ZonotopeEnv
+import safediffusion.utils.transform_utils as TransformUtils
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -116,7 +117,8 @@ class SafeArmEnv(ZonotopeEnv):
         return geoms
 
     def register_static_obstacle_geoms(self):
-        """ Register the collision geometry that is considered dangerous and static
+        """ 
+        Register the collision geometry that is considered dangerous and static
         """
         # get geometry that belong to mount & bin
         geoms = self.get_geom_that_body_name_starts_with(["mount", "bin"])
@@ -126,7 +128,8 @@ class SafeArmEnv(ZonotopeEnv):
         return geoms
 
     def register_dynamic_obstacle_geoms(self):
-        """ Register the geometry that is considered dangerous and dynamic
+        """ 
+        Register the geometry that is considered dangerous and dynamic
         """
         geoms = []
         
@@ -142,16 +145,62 @@ class SafeArmEnv(ZonotopeEnv):
     # -------------------------------------------------------- #
     # Abstract functions to override (EnvBase)
     # -------------------------------------------------------- #
+    def set_goal(self, qpos = None):
+        """
+        Override the `set_goal` method from `EnvBase`.
+
+        This method sets the goal observation based on an external specification.
+        Specifically, it defines the target joint configuration (qpos) for the robot arm.
+
+        Args:
+            qpos (np.ndarray, optional): Desired goal joint configuration.
+                If provided, this will set the `_target_qpos` attribute.
+                Defaults to None.
+
+        Returns:
+            dict: The current goal as a dictionary, retrieved from `get_goal()`.
+        """
+        if qpos is not None:
+            self._target_qpos = qpos
+
+        return self.get_goal()
+    
+    def get_goal(self):
+        """
+        Override the `get_goal` method from `EnvBase`.
+
+        Returns:
+            dict: A dictionary representing the goal configuration.
+            If `_target_qpos` is defined, it includes the goal joint configuration.
+        """
+        goal_dict = dict()
+
+        if hasattr(self, '_target_qpos'):
+            goal_dict["qpos"] = self._target_qpos
+        
+        return goal_dict
 
     def get_observation(self, obs=None):
-        """ Postprocess observation        
+        """ 
+        Postprocess observation from SafeZonotopeEnv
         """
         obs = super().get_observation(obs)
+
+        # add the transform between the world to the robot base
+        mjdata = self.unwrapped_env.sim.data
+
+        T_world_to_arm_base = TransformUtils.make_pose(
+                                 rot = mjdata.get_body_xmat("robot0_base"),
+                                 pos = mjdata.get_body_xpos("robot0_base")
+                                 )
+
+        obs["T_world_to_arm_base"] = T_world_to_arm_base 
 
         return obs
     
     def reset(self):
-        """ Reset the environment
+        """ 
+        Reset the environment
 
         Returns:
             observation (dict): observation dictionary after setting the simulator state
@@ -197,4 +246,3 @@ class SafeArmEnv(ZonotopeEnv):
 
         # TODO: maybe update the `done` information according to the criteria
         return obs, reward, done, info
-

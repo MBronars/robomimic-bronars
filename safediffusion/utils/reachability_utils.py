@@ -11,9 +11,9 @@ from stl import mesh
 
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
 if use_zonopy:
-    from zonopy.contset import zonotope
+    from zonopy.contset import zonotope, batchZonotope
 else:
-    from safediffusion.armtdpy.reachability.conSet import zonotope
+    from safediffusion.armtdpy.reachability.conSet import zonotope, batchZonotope
 
 
 def transform_zonotope(zono, pos, rot):
@@ -187,11 +187,22 @@ def get_zonotope_from_sphere_geom(pos, rot, size):
 
     return zonotope(Z)
 
-def get_zonotope_from_stl_file(stl_file):
+def get_zonotope_from_stl_file(stl_file, mesh_scale=None):
     """
     Create zonotope that bounds the mesh represented by the stl file
+
+    Args:
+        stl_file (str): the path to the stl file
+        mesh_scale (np.array): (3,) array that specifies the mesh scale per axis (x, y, z)
+
+    Returns:
+        zonotope: the zonotope that bounds the mesh
     """
     V = get_mesh_vertices_from_stl_file(stl_file)
+    
+    if mesh_scale is not None:
+        V = V * mesh_scale
+    
     Z = get_zonotope_from_mesh_vertices(V)
 
     return Z
@@ -241,6 +252,23 @@ def get_zonotope_from_segment(x1, x2):
     Z = torch.vstack([c, G])
 
     return zonotope(Z)
+
+def maybe_flatten_the_zonotope(zonotope_list):
+    assert isinstance(zonotope_list, list)
+    
+    flat_list = []
+    
+    def flatten(sublist):
+        for item in sublist:
+            if isinstance(item, batchZonotope):
+                flatten(item)
+            else:
+                flat_list.append(item)
+                
+    flatten(zonotope_list)
+    
+    return flat_list
+
 
 if __name__ == "__main__":
     c = np.array([1, 1, 1])
