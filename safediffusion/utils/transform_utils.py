@@ -64,7 +64,6 @@ def rotation_matrix_to_quaternion(rot):
 
     return q
 
-
 def rot_interp(R1, R2, ratio):
     # Convert rotation matrices to quaternions
     q1 = R.from_matrix(R1).as_quat()
@@ -84,7 +83,6 @@ def pos_interp(p1, p2, ratio):
 
     return p_interp
 
-
 def pose_interp(T1, T2, ratio):
     R1, p1 = pose_to_rot_pos(T1)
     R2, p2 = pose_to_rot_pos(T2)
@@ -95,3 +93,87 @@ def pose_interp(T1, T2, ratio):
     T_interp = make_pose(R_interp, p_interp)
 
     return T_interp
+
+def rot_skew(angular_axis):
+    """
+    Skew matrix representation of the angular axis
+
+    [a b c] -> [ 0 -c  b;
+                 c  0 -a;
+                -b  a  0]                
+
+    Args:
+        angular_axis (np.array) (B, 3)
+    
+    Returns:
+        skew_symmetric_matrix (np.array) (B, 3, 3)
+    """
+    assert angular_axis.shape[-1] == 3
+
+    # Define the skew-symmetric template matrix
+    w = np.array([[[0,  0,  0],
+                   [0,  0,  -1],
+                   [0,  1,  0]],
+
+                  [[0,  0,  1],
+                   [0,  0,  0],
+                   [-1,  0,  0]],
+
+                  [[ 0, -1,  0],
+                   [ 1,  0,  0],
+                   [ 0,  0,  0]]])  # Shape (3, 3, 3)
+
+    # Reshape angular_axis to shape (B, 3, 1) to allow broadcasting with w
+    angular_axis = angular_axis[:, np.newaxis, :]  # Shape (B, 1, 3)
+
+    # Perform matrix multiplication using broadcasting
+    skew_matrices = np.einsum('bij,jik->bik', angular_axis, w)  # Shape (B, 3, 3)
+
+    return skew_matrices
+
+def bracket_screw_axis(screw_axis):
+    """
+    Bracket operation of the screw axis
+
+    Args:
+        screw_axis (np.array): (B, 6) [v, w]
+    
+    Returns:
+        bracket_screw_axis (np.array): (B, 4, 4) matrix [[w] v; 0 0]
+    """
+    assert screw_axis.shape[-1] == 6, "The last dimension should be 6."
+    assert np.allclose(np.linalg.norm(screw_axis[:, 3:], axis = 1), 1)
+    
+    if screw_axis.ndim == 1:
+        screw_axis = screw_axis[np.newaxis, :]
+
+    B = screw_axis.shape[0]
+
+    v = screw_axis[:, :3]
+    w = screw_axis[:, 3:]
+
+    out = np.concatenate([rot_skew(w), v[:, :, np.newaxis]], axis = -1) # (B, 3, 4)
+    out = np.concatenate([out, np.zeros((B, 1, 4))]        , axis = -2)
+
+    return out
+
+def adjoint_T(T):
+    """
+    Adjoint transformation matrix
+
+    Args:
+        T (np.array): (4, 4) transformation matrix
+    
+    Returns:
+        adjoint_T (np.array): (6, 6) adjoint transformation matrix
+    """
+    R, p = pose_to_rot_pos(T)
+
+    adjoint_T = np.zeros((6, 6))
+
+    adjoint_T[:3, :3] = R
+    adjoint_T[3:, 3:] = R
+
+    adjoint_T[3:, :3] = np.matmul(rot_skew(p.unsqueeze(0)), R)
+
+    return adjoint_T

@@ -17,8 +17,8 @@
             "zonotope":{
                 "zoom_factor": 1.6,
                 "FRS":{
-                    "color": "grey",
-                    "alpha": 0.01,
+                    "color": "green",
+                    "alpha": 0.1,
                     "linewidth": 0.01
                 },
                 "robot":{

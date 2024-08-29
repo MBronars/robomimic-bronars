@@ -79,14 +79,12 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names,
 
                     plan = policy.backup_policy.get_grasping_pos_from_plan(
                         plan                = policy.nominal_plan,
-                        T_world_to_arm_base = obs["T_world_to_arm_base"]
                     )
 
                     # prepare visualization
-                    plan = policy.backup_policy.get_eef_pos_from_plan(
-                            plan                  = policy.nominal_plan,
-                            T_world_to_arm_base   = obs["T_world_to_arm_base"],
-                    )
+                    # plan = policy.backup_policy.get_arm_eef_pos_from_plan(
+                    #         plan                  = policy.nominal_plan,
+                    # )
 
                     # if len(policy._backup_plan) > 0:
                     #     backup_plan = policy.backup_policy.get_eef_pos_from_plan(
@@ -196,6 +194,12 @@ if __name__ == "__main__":
                                         config_json_path, 
                                         "safety_filter",
                                         policy_kwargs = {"horizon": {"prediction_horizon": 32}}
+    )
+
+    policy.set_default_strategy(
+        dict(joint_pos_goal       = 0.0, 
+             joint_pos_projection = 1.0,
+             grasp_pos_goal       = 0.0)
     )
 
     # rollout the policy in the environment using random initial states

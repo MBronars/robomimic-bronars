@@ -120,9 +120,13 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
     
     def update(self, ob, goal = None, **kwargs):
         (plan, actions) = self.get_plan_from_nominal_policy(ob, goal, **kwargs)
-        info            = self.monitor_and_compute_backup_plan(plan, ob, goal)
-
-        # Definition of safety in this framework
+        if plan is not None:
+            # Definition of safety in this framework
+            info = self.monitor_and_compute_backup_plan(plan, ob, goal)
+        
+        else:
+            info = dict(head_plan = True, backup_plan = None)
+        
         is_safe     = info["head_plan"] and info["backup_plan"] is not None
 
         if is_safe:
@@ -295,6 +299,15 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
 
         return obs_dict_processed, goal_dict_processed
     
+    def set_default_strategy(self, weight_dict):
+        for key in self.backup_policy_weight_keys:
+            assert key in weight_dict.keys()
+
+        self._default_weight_dict = weight_dict
+    
+    def get_default_strategy(self):
+        return self._default_weight_dict
+    
     def update_backup_policy_weight(self):
         """
         Update the weight dictionary of the backup policy according to the internal status.
@@ -304,16 +317,13 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         TODO: Check if all keys of the weight dict is in the backup planner
         TODO: Refactor this to update this weight dict to internal status
         """
-        # weight_dict = dict(joint_pos_goal       = 0.0, 
-        #                    joint_pos_projection = 1.0,
-        #                    grasp_pos_goal       = 0.0)
-
-        # # check that we configured all the objectives of backup policy
-        # for key in self.backup_policy_weight_keys:
-        #     assert key in weight_dict.keys()
+        weight_dict = self.get_default_strategy()
         
-        # self.backup_policy.update_weight(weight_dict)
-        raise NotImplementedError
+        # check that we configured all the objectives of backup policy
+        for key in self.backup_policy_weight_keys:
+            assert key in weight_dict.keys()
+        
+        self.backup_policy.update_weight(weight_dict)
     
     # ------------------------------------------------------ #
     # Implementation of ranking 
@@ -436,6 +446,15 @@ class IdentityBackupPolicyArm(SafeDiffusionPolicyArm):
         
         return action, controller_to_use
     
+    def set_default_strategy(self, weight_dict):
+        for key in self.backup_policy_weight_keys:
+            assert key in weight_dict.keys()
+
+        self._default_weight_dict = weight_dict
+    
+    def get_default_strategy(self):
+        return self._default_weight_dict
+    
     def update_backup_policy_weight(self):
         """
         Update the weight dictionary of the backup policy according to the internal status.
@@ -445,10 +464,8 @@ class IdentityBackupPolicyArm(SafeDiffusionPolicyArm):
         TODO: Check if all keys of the weight dict is in the backup planner
         TODO: Refactor this to update this weight dict to internal status
         """
-        weight_dict = dict(joint_pos_goal       = 1.0, 
-                           joint_pos_projection = 0.0,
-                           grasp_pos_goal       = 0.0)
-
+        weight_dict = self.get_default_strategy()
+        
         # check that we configured all the objectives of backup policy
         for key in self.backup_policy_weight_keys:
             assert key in weight_dict.keys()

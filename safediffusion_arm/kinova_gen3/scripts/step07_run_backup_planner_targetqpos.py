@@ -74,7 +74,6 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
                 
                 elif render_mode == "zonotope":
                     video_img = []
-                    plan = policy.backup_policy.get_grasping_pos_from_plan(plan = policy.nominal_plan)
 
                     n_skip = 25
                     FRS_links = []
@@ -98,7 +97,6 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
                                        FRS         = FRS,
                                        goal        = policy.backup_policy.goal_zonotope,
                                        # trajectory
-                                       plan        = plan,
                                        intervened  = policy.intervened,
                                     )
                         )
@@ -133,7 +131,7 @@ if __name__ == "__main__":
     rollout_horizon  = 600
     render_mode      = "zonotope"
     camera_names     = ["agentview", "frontview"]
-    seeds            = range(10)
+    seeds            = range(6, 10)
     # ----------------------------------------- #
     # This seed is used to set the random seed for the environment and the policy, 
     # regardless of the random seed used for the rollout
@@ -144,6 +142,12 @@ if __name__ == "__main__":
                                         config_json_path, 
                                         "backup",
                                         policy_kwargs = {"horizon": {"prediction_horizon": 32}}
+    )
+
+    policy.set_default_strategy(
+        dict(joint_pos_goal       = 0.0, 
+             joint_pos_projection = 0.0,
+             grasp_pos_goal       = 1.0)
     )
 
     # rollout the policy in the environment using random initial states

@@ -18,6 +18,7 @@ from safediffusion.algo.helper import traj_uniform_acc, ReferenceTrajectory
 from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.utils.npy_utils import scale_array_from_A_to_B
 import safediffusion.utils.transform_utils as TransformUtils
+import safediffusion.utils.math_utils as MathUtils
 
 # decide which zonotope library to use
 use_zonopy = os.getenv('USE_ZONOPY', 'false').lower() == 'true'
@@ -281,20 +282,21 @@ class ArmtdPlanner(ParameterizedPlanner):
         obs_dict_processed  = deepcopy(obs_dict)
         goal_dict_processed = deepcopy(goal_dict)
         
-        # Objective 1: joint_pos_goal
-        if "qpos" in goal_dict.keys():
-            qgoal = self.to_tensor(goal_dict["qpos"])
-            goal_dict_processed["qpos"] = qgoal
-            self.goal_zonotope = self.get_arm_zonotopes_at_q(q = qgoal)
+        for key in goal_dict.keys():
+            if key == "qpos":
+                qgoal = self.to_tensor(goal_dict["qpos"])
+                goal_dict_processed["qpos"] = qgoal
+                self.goal_zonotope = self.get_arm_zonotopes_at_q(q = qgoal)
+            
+            elif key == "reference_trajectory":
+                pass
 
-        # Objective 2: joint_pos_projection
-        if "plan" in goal_dict.keys():
-            pass
-
-        # Objective 3: grasp_pos_goal
-        if "grasp_pos" in goal_dict.keys():
-            grasp_pos_goal = self.to_tensor(goal_dict["grasp_pos"])
-            goal_dict_processed["grasp_pos"] = grasp_pos_goal
+            elif key == "grasp_pos":
+                grasp_pos_goal = self.to_tensor(goal_dict["grasp_pos"])
+                goal_dict_processed["grasp_pos"] = grasp_pos_goal
+            
+            else:
+                raise NotImplementedError
 
         return obs_dict_processed, goal_dict_processed
     
@@ -349,15 +351,18 @@ class ArmtdPlanner(ParameterizedPlanner):
         """
         data = {}
         
-        # prepare data for the joint_pos_goal
-        if "qpos" in goal_dict.keys():
-            data["joint_pos_goal"] = dict(qpos_goal = goal_dict["qpos"])
-        
-        if "grasp_pos" in goal_dict.keys():
-            data["grasp_pos_goal"] = dict(grasp_pos_goal = goal_dict["grasp_pos"])
+        for key in goal_dict.keys():
+            if key == "qpos":
+                data["joint_pos_goal"] = dict(qpos_goal = goal_dict["qpos"])
+            
+            elif key == "grasp_pos":
+                data["grasp_pos_goal"] = dict(grasp_pos_goal = goal_dict["grasp_pos"])
 
-        if "plan" in goal_dict.keys():
-            data["joint_pos_projection"] = dict(plan = goal_dict["plan"])
+            elif key == "reference_trajectory":
+                data["joint_pos_projection"] = dict(reference_trajectory = goal_dict["reference_trajectory"])
+            
+            else:
+                raise NotImplementedError
 
         return data
 
@@ -379,14 +384,15 @@ class ArmtdPlanner(ParameterizedPlanner):
         Obj = {}
         Grad = {}
         
-        # qpos goal
+        # qpos goal (verified)
         if "joint_pos_goal" in objective_data.keys():
             Obj["joint_pos_goal"], Grad["joint_pos_goal"] = self._compute_objective_joint_pos_goal(
                                                             ka    = ka, 
                                                             qpos  = qpos, 
                                                             qvel  = qvel, 
                                                             **objective_data["joint_pos_goal"])
-        # joint_pos_projection
+        
+        # joint_pos_projection (verified)
         if "joint_pos_projection" in objective_data.keys():
             Obj["joint_pos_projection"], Grad["joint_pos_projection"] = self._compute_objective_joint_pos_projection(
                                                                     ka = ka,
@@ -394,7 +400,7 @@ class ArmtdPlanner(ParameterizedPlanner):
                                                                     qvel = qvel,
                                                                     **objective_data["joint_pos_projection"])
         
-        # grasping pos goal
+        # # grasping pos goal
         # if "grasp_pos_goal" in objective_data.keys():
         #     Obj["grasp_pos_goal"], Grad["grasp_pos_goal"] = self._compute_objective_grasp_pos_goal(
         #                                                             ka = ka,
@@ -416,6 +422,21 @@ class ArmtdPlanner(ParameterizedPlanner):
         
         return Obj, Grad
     
+    # def test_func(self, ka, qpos, qvel, objective_data):
+    #     o, _ =  self._compute_objective_joint_pos_projection(
+    #                                                             ka = ka,
+    #                                                             qpos = qpos,
+    #                                                             qvel = qvel,
+    #                                                             **objective_data["joint_pos_projection"])
+    #     return o
+    
+    # jac = MathUtils.compute_jacobian(function=test_func, args = dict(self=self, ka=ka, qpos=qpos, qvel=qvel, objective_data = objective_data), var_name = 'ka')
+    # _, g =  self._compute_objective_joint_pos_projection(
+    #                                                     ka = ka,
+    #                                                     qpos = qpos,
+    #                                                     qvel = qvel,
+    #                                                     **objective_data["joint_pos_projection"])
+    
     def _compute_objective_joint_pos_goal(self, ka, qpos, qvel, qpos_goal):
         """
         c(ka) = ||q(t_f) - qgoal||
@@ -430,26 +451,29 @@ class ArmtdPlanner(ParameterizedPlanner):
             Obj: c(ka)
             Grad: the gradient of c(ka) w.r.t. ka
         """
-        T_PEAK         = self.time_pieces[0]
-        T_FULL         = self.t_f
+        # joint-angle trajectory design
+        t_last = self.to_tensor([self.t_f])
+        param  = torch.hstack([qvel, ka])
+        qpos_last, _, grad_qpos_last_to_ka = self.model(t_last, qpos, param, return_gradient = True)
         
-        # qpos(T_PEAK)
-        qpos_peak      = qpos + qvel * T_PEAK + 0.5 * ka * T_PEAK**2
-        qvel_peak      = qvel + ka * T_PEAK
+        # eliminating batch-dim and horizon-dim
+        qpos_last            = qpos_last[0][0]
+        grad_qpos_last_to_ka = grad_qpos_last_to_ka[0][0]
 
-        # qpos(T_FULL)
-        braking_accel  = (0 - qvel_peak)/(T_FULL - T_PEAK)
-        qf             = qpos_peak + qvel_peak*(T_FULL - T_PEAK) + 0.5*braking_accel*(T_FULL-T_PEAK)**2
-        grad_qf        = 0.5 * T_PEAK * T_FULL
+        # the gradient of wrap joint should be identity mapping
+        dq = self.wrap_cont_joint_to_pi(qpos_last - qpos_goal).squeeze()
+        grad_dq_to_ka = grad_qpos_last_to_ka
+        
+        # cost function
+        Obj = torch.sum(dq ** 2)
+        Grad_to_dq = 2*dq
 
-        dq = self.wrap_cont_joint_to_pi(qf - qpos_goal).squeeze()
-
-        Obj  = torch.sum(dq**2)
-        Grad = 2*grad_qf*dq
+        # chain rule
+        Grad = grad_dq_to_ka @ Grad_to_dq
 
         return Obj, Grad
     
-    def _compute_objective_joint_pos_projection(self, ka, qpos, qvel, plan):
+    def _compute_objective_joint_pos_projection(self, ka, qpos, qvel, reference_trajectory):
         """
         c(ka) = \sum_{t=0}^{T}||q(t) - qd(t)||
 
@@ -457,58 +481,83 @@ class ArmtdPlanner(ParameterizedPlanner):
             ka:   (n_optvar,) joint acceleration - unnormalized
             qpos: (n_link,) current joint position
             qvel: (n_link,) current joint velocity
-            plan: (ReferenceTrajectory), the nominal trajectory to project
+            reference_trajectory: (ReferenceTrajectory), the nominal trajectory to project
         
         Returns:
             Obj: c(ka)
             Grad: the gradient of c(ka) w.r.t. ka
         """
-        assert(isinstance(plan, ReferenceTrajectory))
+        assert(isinstance(reference_trajectory, ReferenceTrajectory))
 
-        T_FULL         = self.t_f
+        t_eval = reference_trajectory.t_des[reference_trajectory.t_des <= self.t_f]
+        q_eval = reference_trajectory.x_des[reference_trajectory.t_des <= self.t_f]
+        
+        param  = torch.hstack([qvel, ka])
+        qs, _, grad_qs_to_ka = self.model(t_eval, qpos, param, return_gradient = True)
 
-        t_eval = plan.t_des[plan.t_des <= T_FULL]
-        q_eval = plan.x_des[plan.t_des <= T_FULL]
+        # eliminate batch dimension
+        qs            = qs[0]                     # (N_T, n_joint)
+        grad_qs_to_ka = grad_qs_to_ka[0]          # (N_T, n_joint, n_joint)
 
-        q       = (qpos + torch.outer(t_eval, qvel)+ 0.5*torch.outer(t_eval**2, ka))
-        dq      = self.wrap_cont_joint_to_pi(q-q_eval)
-        grad_dq = 0.5*t_eval**2
+        dqs = self.wrap_cont_joint_to_pi(qs - q_eval)
+        grad_dqs_to_ka = grad_qs_to_ka            # (N_T, n_joint, n_joint)
 
-        Obj     = torch.sum(torch.mean(dq**2, dim=0))
-        Grad    = 2*grad_dq@dq
+        # TODO: start here
+        Obj = torch.mean(torch.sum(dqs**2, axis=0))
+        Grad_to_dq = 2 * dqs / dqs.shape[1]
+        Grad = torch.einsum('ijk,ij->k', grad_dqs_to_ka, Grad_to_dq)  # shape (n_joint)
+        
+        # Grad_to_dq = 2 * dqs / dqs.shape[0]  # shape (N_T, n_joint)
+        # Grad_to_ka = torch.einsum('ij,ijk->k', Grad_to_dq, grad_dqs_to_ka)  # shape (n_joint)
+        # Grad = Grad_to_ka
+
+        # Obj.backward()
+        
+        # Grad_to_dq = dqs.grad.squeeze(0)                                    # (1, N_T, n_joint)
+        # dqs.detach()
+        
+        # # Apply the chain rule
+        # Grad_to_ka = torch.einsum('tij,tj->ij', grad_dqs_to_ka, Grad_to_dq)  # (N_T, n_joint, n_joint) @ (N_T, n_joint) -> (n_joint, n_joint)
+
+        # # Sum over the time dimension
+        # Grad = torch.sum(Grad_to_ka, dim=0)  # (n_joint, n_joint) -> (n_joint,)
 
         return Obj, Grad
     
     def _compute_objective_grasp_pos_goal(self, ka, qpos, qvel, grasp_pos_goal):
         """
-        c(ka) = ||p_eef(q(t; k)) - p_eef_des||
+        c(ka) = ||p_eef(q(t; k)) - p_eef_des||_2^2
 
         Args:
             ka:   (n_optvar,) joint accleration - unnormalized
-            qpos: (n_link, ) current joint position
-            qvel: (n_link, ) current joint velocity
+            qpos: (n_joint, ) current joint position
+            qvel: (n_joint, ) current joint velocity
+            grasp_pos_goal (torch.tensor)
         """
-        grasp_pos, grad_grasp_pos = self.get_grasping_pos_at_q(qpos, return_gradient=True)
-
-        T_PEAK = self.time_pieces[0]
-        T_FULL = self.t_f
+        # q(tf; ka)
+        t_last = self.to_tensor([self.t_f])
+        param  = torch.hstack([qvel, ka])
+        qpos_last, _, grad_qpos_last_to_ka = self.model(t_last, qpos, param, return_gradient = True)
         
-        # qpos(T_PEAK)
-        qpos_peak      = qpos + qvel * T_PEAK + 0.5 * ka * T_PEAK**2
-        qvel_peak      = qvel + ka * T_PEAK
+        # eliminate batch_size, time_horizon dimension, which is first two dimension
+        qpos_last = qpos_last[0, 0]
+        grad_qpos_last_to_ka = grad_qpos_last_to_ka[0, 0 ]
 
-        # qpos(T_FULL)
-        braking_accel  = (0 - qvel_peak)/(T_FULL - T_PEAK)
-        qf             = qpos_peak + qvel_peak*(T_FULL - T_PEAK) + 0.5*braking_accel*(T_FULL-T_PEAK)**2
-        grad_qf_to_ka  = 0.5 * T_PEAK * T_FULL * torch.eye(self.n_links)   # dq/dk (7, 7)
-        
-        dgrpos              = grasp_pos - grasp_pos_goal
-        grad_dgrpos_to_qf   = grad_grasp_pos             # (7, 3)
-        
-        cost                = torch.sum((dgrpos) ** 2)
-        grad_cost_to_dgrpos = 2*dgrpos
+        # p_grasp(q(tf; ka))
+        grasp_pos, grad_grasp_pos_to_qpos = self.get_grasping_pos_at_q(qpos_last, return_gradient=True)
 
-        grad_cost = grad_qf_to_ka @ grad_dgrpos_to_qf @ grad_cost_to_dgrpos
+        # p_grasp(q(tf; ka)) - p_grasp_goal
+        delta_grasp_pos           = grasp_pos - grasp_pos_goal
+        grad_delta_grasp_pos_to_q = grad_grasp_pos_to_qpos
+
+        # cost = ||p_grasp(tf; ka) - p_grasp_goal||_2^2
+        cost                         = torch.sum((delta_grasp_pos) ** 2)
+        grad_cost_to_delta_grasp_pos = 2*delta_grasp_pos
+
+        # chain rule
+        grad_cost_to_ka = grad_qpos_last_to_ka @ grad_delta_grasp_pos_to_q @ grad_cost_to_delta_grasp_pos
+
+        return cost, grad_cost_to_ka
 
     # ---------------------------------------------- #
     # Constraints
@@ -1010,10 +1059,10 @@ class ArmtdPlanner(ParameterizedPlanner):
         
         return Pi.cpu().numpy()
     
-    def get_arm_link_pose_at_q(self, q):
+    def get_arm_link_pose_at_q(self, q, return_gradient = False):
         raise NotImplementedError
     
-    def get_grasping_pos_at_q(self, q):
+    def get_grasping_pos_at_q(self, q, return_gradient = False):
         """
         Get the grasping position relative to the world
 
@@ -1039,7 +1088,7 @@ class ArmtdPlanner(ParameterizedPlanner):
     def get_grasping_pos_from_plan(self, plan):
         assert isinstance(plan, ReferenceTrajectory)
 
-        grasping_pos = [self.get_grasping_pos_at_q(plan.x_des[i])
+        grasping_pos = [self.get_grasping_pos_at_q(plan.x_des[i])[0]
                         for i in range(len(plan))]
         grasping_pos = np.stack(grasping_pos, axis=0)
 

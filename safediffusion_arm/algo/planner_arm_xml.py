@@ -198,44 +198,69 @@ class ArmtdPlannerXML(ArmtdPlanner):
 
         return arm_zonos
     
-    def get_arm_link_pose_at_q(self, link_name, q):
+    def get_arm_link_pose_at_q(self, link_name, q, return_gradient = False):
         """
         Get the relative pose of the link of given name at joint angle `q` from the world
 
         Args:
-            q (torch.tensor) (n_joint,) the query joint angle
-            name (str): the name of the link of focus
+            q (torch.tensor)       : the query joint angle
+            name (str)             : the name of the link of focus
+            return_gradient (bool) : True if returns the gradient of the pose
 
         Returns:
-            T (torch.tensor) 4x4 transformation matrix
+            T (torch.tensor)       : (4, 4) transformation matrix
+            grad_T (torch.tensor)  : (n_joint, 4, 4) gradient of the transformation matrix
 
         TODO: maybe check if link_name is valid in this func?
         """
         q                  = self.to_tensor(q)
-        R, p               = self.arm_parser.forward_kinematics(q, link_name)
-        T_arm_base_to_link = TransformUtils.make_pose(rot=R,  pos=p)
-
+        R, p               = self.arm_parser.forward_kinematics(q = q, name = link_name)
+        T_arm_base_to_link = TransformUtils.make_pose(rot = R, pos = p)
         T_world_to_link    = self.T_world_to_arm_base @ T_arm_base_to_link
+        T_world_to_link    = self.to_tensor(T_world_to_link)
+
+        if return_gradient:
+            Jac_arm_base_to_link    = self.arm_parser.compute_space_jacobian(q = q, name = link_name)  # (6, 7)
+            Jac_world_to_link       = TransformUtils.adjoint_T(T_world_to_link) @ Jac_arm_base_to_link  # (6, 7)
+
+        else:
+            grad_T_world_to_link    = None
         
-        return T_world_to_link
+        
+        return T_world_to_link, grad_T_world_to_link
     
-    def get_grasping_pos_at_q(self, q):
+    def get_grasping_pos_at_q(self, q, return_gradient = False):
         """
         Get the grasping position relative to the world
 
         Args:
-            q (numpy array) (n_joint,) arm joint angle
+            q (np.darray) (n_joint,) arm joint angle
         
         Returns:
-            pos_world_to_grasp (numpy array) (3,) the grasping position relative to the world
+            pos_world_to_grasp (np.darray) (3,) the grasping position relative to the world
+            grad_pos_world_to_grasp (np.darray) (7, 3)
 
         TODO: unify the naming convention as base, last_link, gripper_base, grasping_site
         """
-        T_world_to_gripper_base = self.get_arm_link_pose_at_q(self.robot_gripper_site_name, q)
+        assert self.gripper_name is not None
+
+        T_world_to_gripper_base, grad_T_to_q = self.get_arm_link_pose_at_q(
+                                                            q               = q,
+                                                            link_name       = self.robot_gripper_site_name, 
+                                                            return_gradient = return_gradient)
+        
         T_world_to_grasp        = T_world_to_gripper_base @ self.T_gripper_base_to_grasp
         _, pos_world_to_grasp   = TransformUtils.pose_to_rot_pos(T_world_to_grasp)
+        pos_world_to_grasp      = self.to_tensor(pos_world_to_grasp)
 
-        return pos_world_to_grasp
+        if return_gradient:
+            grad_T_to_q             = grad_T_to_q @ self.T_gripper_base_to_grasp
+            grad_pos_world_to_grasp = grad_T_to_q[:, :3, -1]
+            grad_pos_world_to_grasp = self.to_tensor(grad_pos_world_to_grasp)
+        else:
+            grad_pos_world_to_grasp = None
+        
+        return pos_world_to_grasp, grad_pos_world_to_grasp
     
     def get_gripper_zonotopes_at_q(self, q, T_frame_to_base):
         """

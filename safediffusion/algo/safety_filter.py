@@ -163,6 +163,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             info : dict containing the safety information
         """
         assert isinstance(plan, ReferenceTrajectory)
+
+        if plan is None:
+            info["h"]
         
         info = dict()
 

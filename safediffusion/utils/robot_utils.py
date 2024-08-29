@@ -716,7 +716,12 @@ class RobotXMLParser:
         Returns:
             list: A list of zonotopes representing the forward occupancy of the robot links.
         """
-        self.fk_done = False
+        self.done = False
+        
+        n   = self.get_n_joint()
+        R_s = self.to_tensor(torch.zeros(3, 3, n))
+        P_s = self.to_tensor(torch.zeros(3, n))
+
         def _recursive_fk(node, Ri, Pi, joint_index):
             """
             Recursively compute forward kinematics for each node in the tree.
@@ -738,16 +743,20 @@ class RobotXMLParser:
             if node.joint_info:
                 # Update the rotation and position based on the current joint
                 Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+
+                R_s[:, :, joint_index] = Ri
+                P_s[:, joint_index]    = Pi
                 joint_index += 1
 
             if node.name == name:
-                self.fk_done = True
-                self.R = Ri
-                self.P = Pi
+                self.done = True
+                self.target_joint_index = joint_index - 1
+                self.R                  = Ri
+                self.P                  = Pi
 
             # Recursively process each child node
-            for child in node.children:
-                if not self.fk_done:
+            if not self.done:
+                for child in node.children:
                     joint_index = _recursive_fk(child, Ri, Pi, joint_index)
 
             return joint_index
@@ -757,10 +766,81 @@ class RobotXMLParser:
         Pi = self.to_tensor(self.root_node.pos)
 
         # Start recursive forward kinematics computation
-        _recursive_fk(self.root_node, Ri, Pi, 0)
+        joint_index = _recursive_fk(self.root_node, Ri, Pi, 0)
 
-        if self.fk_done:
-            return self.R, self.P
+        if self.done:
+            R_target = R_s[:, :, self.target_joint_index]
+            P_target = P_s[:, self.target_joint_index]
+
+            return R_target, P_target
         
-        else:
-            raise NotImplementedError
+        elif name == "all":
+            return R_s, P_s
+        
+    def compute_space_jacobian(self, q, name):
+        """
+        Compute the space Jacobian for the manipulator using a recursive method.
+
+        Args:
+            q (torch.tensor): A tensor of joint angles.
+
+        Returns:
+            torch.tensor: The space Jacobian (6 x n).
+        """
+        # Initialize the Jacobian matrix
+        n   = self.get_n_joint()
+        J_s = self.to_tensor(torch.zeros(6, n))
+
+        self.done = False
+
+        R_s, P_s = self.forward_kinematics(q, "all")
+
+        def _recursive_jacobian(node, Ri, Pi, joint_index):
+            """
+            Recursively compute the space Jacobian for each node in the tree.
+
+            Args:
+                node (TreeNode): The current node in the tree.
+                Ri (torch.tensor): The current rotation matrix.
+                Pi (torch.tensor): The current position vector.
+                joint_index (int): The index of the current joint in the chain.
+
+            Returns:
+                int: Updated joint index after processing the current node and its children.
+            """
+
+            # Compute the current position and rotation of the node
+            Pi = Ri @ node.pos + Pi
+            Ri = Ri @ node.rot
+
+            if node.joint_info:
+                # Compute the axis of rotation in the world frame
+                w_i = self.to_tensor(node.joint_info['axis'])
+                a_i = Ri @ w_i
+
+                # Fill in the Jacobian columns corresponding to this joint
+                J_s[:3, joint_index] = torch.cross(a_i, P_s[:, -1] - P_s[:, joint_index])
+                J_s[3:, joint_index] = a_i
+
+                if node.name == name:
+                    self.done = True
+
+                # Update the rotation for the next segment based on the joint angle
+                Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+                joint_index += 1
+
+            # Recursively process each child node
+            if not self.done:
+                for child in node.children:
+                    joint_index = _recursive_jacobian(child, Ri, Pi, joint_index)
+
+            return joint_index
+
+        # Initialize rotation and position based on the root node
+        Ri = self.to_tensor(torch.eye(3))
+        Pi = self.to_tensor(self.root_node.pos)
+
+        # Start recursive Jacobian computation
+        _recursive_jacobian(self.root_node, Ri, Pi, 0)
+
+        return J_s
