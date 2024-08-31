@@ -73,6 +73,19 @@ class ArmtdPlanner(ParameterizedPlanner):
         self.max_combs  = kwargs["zonotope"]["max_comb"]
         self.combs      = self.generate_combinations_upto(self.max_combs)
 
+        # load reachable_scene_filter
+        self.use_reachable_scene_filter = kwargs["trajopt"]["use_reachable_scene_filter"]
+        self.reachable_radius           = kwargs["trajopt"]["reachable_scene_radius"]
+        if self.use_reachable_scene_filter:
+            self.disp(f"[CAUTION] Using reachable scene filter with radius: {self.reachable_radius}")
+
+        self.use_last_few_arm_links     = kwargs["trajopt"]["use_last_few_arm_links"]
+        self.num_last_few_arm_links     = kwargs["trajopt"]["num_last_few_arm_links"]
+        if self.use_last_few_arm_links:
+            self.disp(f"[CAUTION] Using last {self.num_last_few_arm_links} arm links for constraint qualification")
+            
+        self.use_gripper_approximation  = kwargs["trajopt"]["use_gripper_approximation"]        
+
         # trajectory optimization
         self.opt_dim     = range(self.n_links, 2*self.n_links)
         self.weight_dict = dict(joint_pos_goal       = 0.0, 
@@ -401,12 +414,12 @@ class ArmtdPlanner(ParameterizedPlanner):
                                                                     **objective_data["joint_pos_projection"])
         
         # # grasping pos goal
-        # if "grasp_pos_goal" in objective_data.keys():
-        #     Obj["grasp_pos_goal"], Grad["grasp_pos_goal"] = self._compute_objective_grasp_pos_goal(
-        #                                                             ka = ka,
-        #                                                             qpos = qpos,
-        #                                                             qvel = qvel,
-        #                                                             **objective_data["grasp_pos_goal"])
+        if "grasp_pos_goal" in objective_data.keys():
+            Obj["grasp_pos_goal"], Grad["grasp_pos_goal"] = self._compute_objective_grasp_pos_goal(
+                                                                    ka = ka,
+                                                                    qpos = qpos,
+                                                                    qvel = qvel,
+                                                                    **objective_data["grasp_pos_goal"])
             
         # weighting
         total_cost = self.to_tensor(0)
@@ -421,21 +434,6 @@ class ArmtdPlanner(ParameterizedPlanner):
         Grad = total_grad.cpu().numpy()
         
         return Obj, Grad
-    
-    # def test_func(self, ka, qpos, qvel, objective_data):
-    #     o, _ =  self._compute_objective_joint_pos_projection(
-    #                                                             ka = ka,
-    #                                                             qpos = qpos,
-    #                                                             qvel = qvel,
-    #                                                             **objective_data["joint_pos_projection"])
-    #     return o
-    
-    # jac = MathUtils.compute_jacobian(function=test_func, args = dict(self=self, ka=ka, qpos=qpos, qvel=qvel, objective_data = objective_data), var_name = 'ka')
-    # _, g =  self._compute_objective_joint_pos_projection(
-    #                                                     ka = ka,
-    #                                                     qpos = qpos,
-    #                                                     qvel = qvel,
-    #                                                     **objective_data["joint_pos_projection"])
     
     def _compute_objective_joint_pos_goal(self, ka, qpos, qvel, qpos_goal):
         """
@@ -489,9 +487,11 @@ class ArmtdPlanner(ParameterizedPlanner):
         """
         assert(isinstance(reference_trajectory, ReferenceTrajectory))
 
+        # parse reference trajectory information
         t_eval = reference_trajectory.t_des[reference_trajectory.t_des <= self.t_f]
         q_eval = reference_trajectory.x_des[reference_trajectory.t_des <= self.t_f]
         
+        # trajectory design
         param  = torch.hstack([qvel, ka])
         qs, _, grad_qs_to_ka = self.model(t_eval, qpos, param, return_gradient = True)
 
@@ -499,28 +499,14 @@ class ArmtdPlanner(ParameterizedPlanner):
         qs            = qs[0]                     # (N_T, n_joint)
         grad_qs_to_ka = grad_qs_to_ka[0]          # (N_T, n_joint, n_joint)
 
+        # delta joint angle
         dqs = self.wrap_cont_joint_to_pi(qs - q_eval)
         grad_dqs_to_ka = grad_qs_to_ka            # (N_T, n_joint, n_joint)
 
-        # TODO: start here
+        # sum and mean
         Obj = torch.mean(torch.sum(dqs**2, axis=0))
         Grad_to_dq = 2 * dqs / dqs.shape[1]
         Grad = torch.einsum('ijk,ij->k', grad_dqs_to_ka, Grad_to_dq)  # shape (n_joint)
-        
-        # Grad_to_dq = 2 * dqs / dqs.shape[0]  # shape (N_T, n_joint)
-        # Grad_to_ka = torch.einsum('ij,ijk->k', Grad_to_dq, grad_dqs_to_ka)  # shape (n_joint)
-        # Grad = Grad_to_ka
-
-        # Obj.backward()
-        
-        # Grad_to_dq = dqs.grad.squeeze(0)                                    # (1, N_T, n_joint)
-        # dqs.detach()
-        
-        # # Apply the chain rule
-        # Grad_to_ka = torch.einsum('tij,tj->ij', grad_dqs_to_ka, Grad_to_dq)  # (N_T, n_joint, n_joint) @ (N_T, n_joint) -> (n_joint, n_joint)
-
-        # # Sum over the time dimension
-        # Grad = torch.sum(Grad_to_ka, dim=0)  # (n_joint, n_joint) -> (n_joint,)
 
         return Obj, Grad
     
@@ -544,7 +530,10 @@ class ArmtdPlanner(ParameterizedPlanner):
         grad_qpos_last_to_ka = grad_qpos_last_to_ka[0, 0 ]
 
         # p_grasp(q(tf; ka))
-        grasp_pos, grad_grasp_pos_to_qpos = self.get_grasping_pos_at_q(qpos_last, return_gradient=True)
+        # HACK: the jacobian is computed using torch backend, which is not efficient
+        # grasp_pos, grad_grasp_pos_to_qpos = self.get_grasping_pos_at_q(qpos_last, return_gradient=True)
+        grasp_pos              = self.get_grasping_pos_at_q(qpos_last, return_gradient=False)
+        grad_grasp_pos_to_qpos = MathUtils.compute_jacobian(function=self.get_grasping_pos_at_q, args=dict(q=qpos_last), var_name='q')
 
         # p_grasp(q(tf; ka)) - p_grasp_goal
         delta_grasp_pos           = grasp_pos - grasp_pos_goal
@@ -555,10 +544,10 @@ class ArmtdPlanner(ParameterizedPlanner):
         grad_cost_to_delta_grasp_pos = 2*delta_grasp_pos
 
         # chain rule
-        grad_cost_to_ka = grad_qpos_last_to_ka @ grad_delta_grasp_pos_to_q @ grad_cost_to_delta_grasp_pos
+        grad_cost_to_ka = grad_qpos_last_to_ka @ grad_delta_grasp_pos_to_q.T @ grad_cost_to_delta_grasp_pos
 
         return cost, grad_cost_to_ka
-
+    
     # ---------------------------------------------- #
     # Constraints
     # ---------------------------------------------- #
@@ -578,22 +567,32 @@ class ArmtdPlanner(ParameterizedPlanner):
         qpos             = self.to_tensor(obs_dict["robot0_joint_pos"])
         qvel             = self.to_tensor(obs_dict["robot0_joint_vel"])
         qpos_gripper     = self.to_tensor(obs_dict["robot0_gripper_qpos"])
+
+        # Constraint 1: joint position/velocity constraint
+        data["joint"]           = self._prepare_constraint_joint()
         
-        # Constraint 1: arm collision constraint
+        # Constraint 2: arm collision constraint
+        obstacles_for_arm = self.get_obstacles_reachable(
+                                obstacles = obs_dict["zonotope"]["obstacle"], 
+                                obs_dict  = obs_dict
+                            ) if self.use_reachable_scene_filter else obs_dict["zonotope"]["obstacle"]
+
         data["arm_collision"] = self._prepare_constraint_arm_collision(
                                             qpos                = qpos, 
                                             qvel                = qvel, 
-                                            obstacles           = obs_dict["zonotope"]["obstacle"])
-        
-        # Constraint 2: joint position/velocity constraint
-        data["joint"]           = self._prepare_constraint_joint()
+                                            obstacles           = obstacles_for_arm)
 
         # Constraint 3: collision b/w robot gripper - {non-active object, arena, mount}
-        # TODO: .polytope operation takes too long.
         if self.gripper_name is not None:
             obstacles = []
             obstacles.extend(obs_dict["zonotope"]["static_obs"])        # mount, arena
             obstacles.extend(obs_dict["zonotope"]["non_active_object"]) # object not to grasp
+            
+            obstacles = self.get_obstacles_reachable(
+                            obstacles = obstacles, 
+                            obs_dict  = obs_dict
+                        ) if self.use_reachable_scene_filter else obstacles
+            
             data["gripper_collision"] = self._prepare_constraint_gripper_collision(
                                                 qpos                = qpos, 
                                                 qvel                = qvel, 
@@ -632,6 +631,11 @@ class ArmtdPlanner(ParameterizedPlanner):
         """
         # robot forward occupancy
         FO_links = self.FRS_all_traj_params(qpos, qvel, return_transforms = False)
+        
+        if self.use_last_few_arm_links:
+            FO_links = FO_links[-self.num_last_few_arm_links:]
+        
+        n_links  = len(FO_links)
 
         # TODO: remove this later
         self.arm_FRS_links = FO_links
@@ -644,8 +648,8 @@ class ArmtdPlanner(ParameterizedPlanner):
         n_interval = self.n_timestep - 1
 
         # TODO: polytope is the bottleneck, this could be 
-        A = np.zeros((self.n_links,n_obs),dtype=object)
-        b = np.zeros((self.n_links,n_obs),dtype=object)
+        A = np.zeros((n_links,n_obs),dtype=object)
+        b = np.zeros((n_links,n_obs),dtype=object)
         for (j, FO_link) in enumerate(FO_links):
             for (i, obstacle) in enumerate(obstacles):
                 obs_Z    = einops.repeat(obstacle.Z, 'm n -> repeat m n', repeat=n_interval)
@@ -657,7 +661,7 @@ class ArmtdPlanner(ParameterizedPlanner):
             A_obs    = A,
             b_obs    = b,
             FO_links = FO_links,
-            n_con    = n_obs * self.n_links * n_interval
+            n_con    = n_obs * n_links * n_interval
         )
 
         return data
@@ -687,7 +691,9 @@ class ArmtdPlanner(ParameterizedPlanner):
         
         # primitive gripper stl (forward kinematics inside)
         gripper_links_stl      = self.get_gripper_zonotopes_at_q(qpos_gripper, 
-                                                                 T_frame_to_base = self.to_tensor(torch.eye(4)))
+                                                                 T_frame_to_base = self.to_tensor(torch.eye(4)),
+                                                                 use_approximation = self.use_gripper_approximation)
+        
         gripper_links_stl      = [link.to_polyZonotope() for link in gripper_links_stl]
 
         # static transform (that does not depend on the joint angle) to the gripper-attachment site
@@ -746,18 +752,21 @@ class ArmtdPlanner(ParameterizedPlanner):
         Cons_list = []
         Jac_list = []
 
-        # C1 - joint constraint
-        Cons_joint, Jac_joint_to_ka = self._compute_joint_constraints(ka=ka[0], qpos=qpos, qvel=qvel)
-        Cons_list.append(Cons_joint); Jac_list.append(Jac_joint_to_ka)
+        # C1 - joint constraint (verified)
+        if "joint" in cdata.keys():
+            Cons_joint, Jac_joint_to_ka = self._compute_joint_constraints(ka=ka[0], qpos=qpos, qvel=qvel)
+            Cons_list.append(Cons_joint); Jac_list.append(Jac_joint_to_ka)
 
         # C2 - robot arm collision constraint
-        Cons_rc, Jac_rc_to_ka = self._compute_arm_collision_constraints(ka = ka, data = cdata["arm_collision"])
-        Cons_list.append(Cons_rc); Jac_list.append(Jac_rc_to_ka)
+        if "arm_collision" in cdata.keys():
+            Cons_rc, Jac_rc_to_ka = self._compute_arm_collision_constraints(ka = ka, data = cdata["arm_collision"])
+            Cons_list.append(Cons_rc); Jac_list.append(Jac_rc_to_ka)
         
         # # C3 - gripper collision constraint
-        if self.gripper_name is not None:
-            Cons_gc, Jac_gc_to_ka = self._compute_gripper_collision_constraints(ka = ka, data = cdata["gripper_collision"])
-            Cons_list.append(Cons_gc); Jac_list.append(Jac_gc_to_ka)
+        if "gripper_collision" in cdata.keys():
+            if self.gripper_name is not None:
+                Cons_gc, Jac_gc_to_ka = self._compute_gripper_collision_constraints(ka = ka, data = cdata["gripper_collision"])
+                Cons_list.append(Cons_gc); Jac_list.append(Jac_gc_to_ka)
         
         # Vectorizing
         Cons      = torch.hstack(Cons_list).cpu().numpy()
@@ -789,7 +798,7 @@ class ArmtdPlanner(ParameterizedPlanner):
         beta = ka/self.FRS_info["delta_k"][self.opt_dim]
         for (l, FO_link) in enumerate(FO_links):
             c_k      = FO_link.center_slice_all_dep(beta)
-            grad_c_k = FO_link.grad_center_slice_all_dep(beta)
+            grad_c_k = FO_link.grad_center_slice_all_dep(beta) # roundc/ roundbeta
             for o in range(n_obs):
                 # constraint: max(Ax - b) <= 0
                 h_obs = (A_obs[l][o]@c_k.unsqueeze(-1)).squeeze(-1) - b_obs[l][o]
@@ -798,10 +807,13 @@ class ArmtdPlanner(ParameterizedPlanner):
 
                 # gradient of the constraint
                 A_max     = A_obs[l][o].gather(-2, ind.reshape(T, 1, 1).repeat(1, 1, self.dimension)) 
-                grad_cons = (A_max@grad_c_k).squeeze(-2) # shape: n_timsteps, n_links safe if >=1e-6
-
-                Cons[(l + n_links*o)*T:(l + n_links*o + 1)*T] = - cons
-                Jac[(l + n_links*o)*T:(l + n_links*o + 1)*T]  = - grad_cons
+                grad_cons = (A_max@grad_c_k).squeeze(-2) # shape: n_timsteps, n_links safe if >=1e-6 #roundcon / roundbeta
+                
+                Cons[(n_obs*l + o)*T:(n_obs*l + o + 1)*T] = - cons
+                Jac[(n_obs*l + o)*T:(n_obs*l + o + 1)*T]  = - grad_cons
+        
+        # jacobian with respect to ka, not x
+        Jac = Jac / self.FRS_info["delta_k"][self.opt_dim]
         
         return Cons, Jac
 
@@ -809,22 +821,22 @@ class ArmtdPlanner(ParameterizedPlanner):
         """
         Robot arm collision constraint
         """
-        T = self.n_timestep - 1
-        N = self.n_links
-        M = data["n_con"] # number of constraints
-        
         FO_links = data["FO_links"]
         A_obs    = data["A_obs"]
         b_obs    = data["b_obs"]
         n_obs    = b_obs.shape[1]
+        
+        T = self.n_timestep - 1
+        N = len(self.opt_dim)
+        M = data["n_con"] # number of constraints
 
         Cons     = torch.zeros(M, dtype = self.dtype)
         Jac      = torch.zeros(M, N, dtype = self.dtype)
 
         beta = ka/self.FRS_info["delta_k"][self.opt_dim]
         for (l, FO_link) in enumerate(FO_links):
-            c_k      = FO_link.center_slice_all_dep(beta)
-            grad_c_k = FO_link.grad_center_slice_all_dep(beta)
+            c_k      = FO_link.center_slice_all_dep(beta)              # (T, 3)
+            grad_c_k = FO_link.grad_center_slice_all_dep(beta)         # (T, 3, n_optvar)
             for o in range(n_obs):
                 # constraint: max(Ax - b) <= 0
                 h_obs = (A_obs[l][o]@c_k.unsqueeze(-1)).squeeze(-1) - b_obs[l][o]
@@ -833,10 +845,13 @@ class ArmtdPlanner(ParameterizedPlanner):
 
                 # gradient of the constraint
                 A_max     = A_obs[l][o].gather(-2, ind.reshape(T, 1, 1).repeat(1, 1, self.dimension)) 
-                grad_cons = (A_max@grad_c_k).squeeze(-2) # shape: n_timsteps, n_links safe if >=1e-6
-
-                Cons[(l + N*o)*T:(l + N*o + 1)*T] = - cons
-                Jac[(l + N*o)*T:(l + N*o + 1)*T]  = - grad_cons
+                grad_cons = (A_max@grad_c_k).squeeze(-2) # shape: n_timsteps, n_links safe if >=1e-6  # (T, n_optvar)                
+                
+                Cons[(n_obs*l + o)*T:(n_obs*l + o + 1)*T] = - cons
+                Jac[(n_obs*l + o)*T:(n_obs*l + o + 1)*T]  = - grad_cons
+                
+        # jacobian with respect to ka, not x
+        Jac = Jac / self.FRS_info["delta_k"][self.opt_dim]
         
         return Cons, Jac
 
@@ -851,18 +866,40 @@ class ArmtdPlanner(ParameterizedPlanner):
             Cons: (2*3*self.n_pos_lim + 2*self.n_link)
             Jac : (", self.n_link)
         """
+        # param  = torch.hstack([qvel, ka])
+        # qpos_des, qvel_des, grad_qpos_des_to_ka = self.model(self.t_des, qpos, param, return_gradient = True)
+
+        # qpos_des = qpos_des[0]
+        # grad_qpos_des_to_ka = grad_qpos_des_to_ka[0]
+
+        # qpos_possible_max_min = qpos_des[:,self.lim_flag] 
+        # qpos_ub               = (qpos_possible_max_min - self.actual_pos_lim[:,0]).flatten()
+        # qpos_lb               = (self.actual_pos_lim[:,1] - qpos_possible_max_min).flatten()
+        # grad_qpos_ub          = grad_qpos_des_to_ka[:, self.lim_flag, :].reshape(-1, len(self.opt_dim))
+        # grad_qpos_lb          = - grad_qpos_ub
+
+        # qvel_ub      =  (qvel_des - self.vel_lim).flatten()
+        # qvel_lb      = (-qvel_des - self.vel_lim).flatten()
+        # grad_qvel_ub = grad_qvel_peak
+        # grad_qvel_lb = -grad_qvel_peak
+
+        # Cons = torch.hstack((qvel_ub, qvel_lb, qpos_ub, qpos_lb))
+        # Jac  = torch.vstack((grad_qvel_ub, grad_qvel_lb, grad_qpos_ub, grad_qpos_lb))
+
+
         # timing
         T_PEAK         = self.time_pieces[0]
         T_FULL         = self.t_f
         T_PEAK_OPTIMUM = -qvel/ka # time to optimum of first half traj.
         
-        # qpos(T_PEAK_OPTIMUM)
-        qpos_peak_optimum      = (T_PEAK_OPTIMUM > 0)*(T_PEAK_OPTIMUM < T_PEAK)*\
-                                (qpos + qvel*T_PEAK_OPTIMUM + 0.5*ka*T_PEAK_OPTIMUM**2).nan_to_num()
+        opt_mask = (T_PEAK_OPTIMUM > 0) & (T_PEAK_OPTIMUM < T_PEAK)
         
-        grad_qpos_peak_optimum = torch.diag((T_PEAK_OPTIMUM>0)*(T_PEAK_OPTIMUM<T_PEAK)*\
-                                            (0.5*qvel**2/(ka**2)).nan_to_num())
+        qpos_peak_optimum = qpos + qvel*T_PEAK_OPTIMUM + 0.5*ka*T_PEAK_OPTIMUM**2
+        qpos_peak_optimum[~opt_mask] = self.actual_pos_lim.mean(dim=1)[~opt_mask]
 
+        grad_qpos_peak_optimum = -torch.diag(0.5*qvel**2/(ka**2).nan_to_num())
+        grad_qpos_peak_optimum[~opt_mask, :] = 0
+        
         # qpos(T_PEAK)
         qpos_peak      = qpos + qvel * T_PEAK + 0.5 * ka * T_PEAK**2
         grad_qpos_peak = 0.5 * T_PEAK**2 * torch.eye(self.n_links, dtype=self.dtype)
@@ -994,6 +1031,32 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         return phases_new
 
+    def get_obstacles_reachable(self, obstacles, obs_dict):
+        """
+        Get the obstacles nearby the center with the radius
+
+        obs_dict
+        
+        Args:
+            obstacles (list): the list of zonotope representation of the obstacles
+            obs_dict (dict): the observation dictionary
+        
+        Returns:
+            obstacles_nearby (list): the list of zonotope representation of the obstacles nearby
+
+        TODO: We should compute the reachable sphere first based on the qpos, qgripper and then filter the obstacles
+        """
+        # get the center and radius of the obstacles
+        obstacle_centers = torch.vstack([obstacle.center for obstacle in obstacles])
+        
+        robot_center     = self.to_tensor(obs_dict["robot0_eef_pos"])
+
+        obstacles_nearby_idx = torch.norm(obstacle_centers - robot_center, dim=1) <= self.reachable_radius
+
+        obstacles_reachable = [obstacle for i, obstacle in enumerate(obstacles) if obstacles_nearby_idx[i]]
+
+        return obstacles_reachable
+
     def rot(self, q):
         """
         Rodrigues' formula
@@ -1059,7 +1122,7 @@ class ArmtdPlanner(ParameterizedPlanner):
         
         return Pi.cpu().numpy()
     
-    def get_arm_link_pose_at_q(self, q, return_gradient = False):
+    def get_arm_link_pose_at_q(self, q):
         raise NotImplementedError
     
     def get_grasping_pos_at_q(self, q, return_gradient = False):
@@ -1088,7 +1151,7 @@ class ArmtdPlanner(ParameterizedPlanner):
     def get_grasping_pos_from_plan(self, plan):
         assert isinstance(plan, ReferenceTrajectory)
 
-        grasping_pos = [self.get_grasping_pos_at_q(plan.x_des[i])[0]
+        grasping_pos = [self.get_grasping_pos_at_q(plan.x_des[i], return_gradient=False)
                         for i in range(len(plan))]
         grasping_pos = np.stack(grasping_pos, axis=0)
 
@@ -1151,8 +1214,12 @@ class ArmtdPlanner(ParameterizedPlanner):
 
         R_last_link_to_gripper = self.to_tensor(self.T_last_link_to_gripper_base[:3, :3])
         P_last_link_to_gripper = self.to_tensor(self.T_last_link_to_gripper_base[:3,  3])
+
+        # for visualization purpose, we do not use one-zonotope approximation
         gripper_links     = self.get_gripper_zonotopes_at_q(qpos_gripper, 
-                                                            T_frame_to_base = self.to_tensor(torch.eye(4)))
+                                                            T_frame_to_base = self.to_tensor(torch.eye(4)),
+                                                            use_approximation = self.use_gripper_approximation)
+        
         gripper_links     = [link.to_polyZonotope() for link in gripper_links]
         gripper_links     = [R_last_link_to_gripper@link + P_last_link_to_gripper for link in gripper_links]
         gripper_FRS_all   = [R[-1]@link + P[-1] for link in gripper_links]

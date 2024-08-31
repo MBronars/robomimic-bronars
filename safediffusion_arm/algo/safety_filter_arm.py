@@ -8,6 +8,7 @@ from robomimic.algo.diffusers import DiffusionPolicyUNet as DiffusersUNet
 from robomimic.utils.obs_utils import unnormalize_dict
 from safediffusion.algo.plan import ReferenceTrajectory
 from safediffusion.algo.safety_filter import SafeDiffusionPolicy
+from safediffusion.algo.planner_base import FEASIBLE_FLAG
 
 class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
     def __init__(self, 
@@ -195,10 +196,10 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
         obs_perf = self.rollout_policy._prepare_observation(obs_perf)
         
         if goal is not None:
-            goal_perf = {k: goal[k] for k in self.rollout_policy_obs_keys}
+            goal_perf = {k: obs[k] for k in self.rollout_policy_goal_keys}
             goal_perf = self.rollout_policy._prepare_observation(goal_perf)
-        else:
-            goal_perf = None
+            if not goal_perf:
+                goal_perf = None
 
         # Compute the multiple trajectories with the policy
         actions_candidates = self.rollout_policy.policy.get_multi_actions(obs_perf, goal_perf, num_trajectories=num_samples)
@@ -346,7 +347,7 @@ class SafeDiffusionPolicyArm(SafeDiffusionPolicy):
                                                          ob   = obs, 
                                                          goal = goal)
 
-            is_safe = info["status"] == 0
+            is_safe = info["status"] in FEASIBLE_FLAG
             obj_val = info["obj_val"]
 
             if is_safe and obj_val < best_obj_val:
@@ -387,6 +388,11 @@ class IdentityDiffusionPolicyArm(SafeDiffusionPolicyArm):
     """
     Implementation of the wrapper of the diffusion policy.
     """
+    def initialize_backup_plan(self, ob, goal=None):
+        dummy_plan = self.get_dummy_backup_plan()
+        self.set_backup_plan(dummy_plan)
+        
+
     def monitor_and_compute_backup_plan(self, plan, ob, goal=None):
         # fill the dummy info
         info = dict()
@@ -394,11 +400,17 @@ class IdentityDiffusionPolicyArm(SafeDiffusionPolicyArm):
         info["head_plan"] = True
         
         # This would be never used. We just need placeholder
-        info["backup_plan"] = ReferenceTrajectory(t_des = self.backup_policy.t_des,
-                                                  x_des = torch.zeros(self.backup_policy.n_timestep, self.backup_policy.n_state))
-        info["backup_plan"].stamp_trajectory_parameter(torch.zeros(self.backup_policy.n_param,))
+        info["backup_plan"] = self.get_dummy_backup_plan()
         
         return info
+    
+    def get_dummy_backup_plan(self):
+        plan = ReferenceTrajectory(t_des = self.backup_policy.t_des,
+                                   x_des = torch.zeros(self.backup_policy.n_timestep, self.backup_policy.n_state))
+        plan.stamp_trajectory_parameter(torch.zeros(self.backup_policy.n_param,))
+
+        return plan
+        
 
 class IdentityBackupPolicyArm(SafeDiffusionPolicyArm):
     """

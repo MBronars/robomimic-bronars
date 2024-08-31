@@ -198,8 +198,11 @@ def parse_body(body, params, Tj, K, actuator_map, meshes_map, xml_file):
                 mesh_name = geom.get('name')
                 if is_mesh_name_used_for_collision_check(mesh_name):
                     mesh_key = geom.get('mesh')
-                    mesh_file = os.path.join(os.path.dirname(xml_file), meshes_map[mesh_key].get('file'))
-                    zonotope = ReachUtils.get_zonotope_from_stl_file(stl_file = mesh_file)
+                    if "vis" not in mesh_key:
+                        mesh_file = os.path.join(os.path.dirname(xml_file), meshes_map[mesh_key].get('file'))
+                        zonotope = ReachUtils.get_zonotope_from_stl_file(stl_file = mesh_file)
+                    else:
+                        continue
                 else:
                     continue
             
@@ -746,13 +749,14 @@ class RobotXMLParser:
 
                 R_s[:, :, joint_index] = Ri
                 P_s[:, joint_index]    = Pi
+
                 joint_index += 1
 
             if node.name == name:
                 self.done = True
                 self.target_joint_index = joint_index - 1
-                self.R                  = Ri
-                self.P                  = Pi
+                self.R_target           = Ri
+                self.P_target           = Pi
 
             # Recursively process each child node
             if not self.done:
@@ -766,16 +770,16 @@ class RobotXMLParser:
         Pi = self.to_tensor(self.root_node.pos)
 
         # Start recursive forward kinematics computation
-        joint_index = _recursive_fk(self.root_node, Ri, Pi, 0)
+        _recursive_fk(self.root_node, Ri, Pi, 0)
 
         if self.done:
-            R_target = R_s[:, :, self.target_joint_index]
-            P_target = P_s[:, self.target_joint_index]
-
-            return R_target, P_target
+            return self.R_target, self.P_target
         
         elif name == "all":
             return R_s, P_s
+        
+        else:
+            raise ValueError(f"Node {name} not found in the robot tree.")
         
     def compute_space_jacobian(self, q, name):
         """
@@ -785,7 +789,9 @@ class RobotXMLParser:
             q (torch.tensor): A tensor of joint angles.
 
         Returns:
-            torch.tensor: The space Jacobian (6 x n).
+            torch.tensor: The space Jacobian (6 x n). [Jw; Jv]
+
+        # TODO: We do forward kinematics twice, which is not efficient. We should refactor this.
         """
         # Initialize the Jacobian matrix
         n   = self.get_n_joint()
@@ -819,8 +825,8 @@ class RobotXMLParser:
                 a_i = Ri @ w_i
 
                 # Fill in the Jacobian columns corresponding to this joint
-                J_s[:3, joint_index] = torch.cross(a_i, P_s[:, -1] - P_s[:, joint_index])
-                J_s[3:, joint_index] = a_i
+                J_s[:3, joint_index] = a_i
+                J_s[3:, joint_index] = torch.cross(a_i, P_s[:, -1] - Pi)
 
                 if node.name == name:
                     self.done = True

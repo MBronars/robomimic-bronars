@@ -1,14 +1,12 @@
-import os
 import abc
 
-from copy import deepcopy
 import torch
 import cyipopt
-import matplotlib.pyplot as plt
 
 from safediffusion.algo.plan import ReferenceTrajectory
+import safediffusion.utils.time_utils as TimeUtils
 
-import einops
+FEASIBLE_FLAG = [0, 1, 6]
 
 class TrajectoryOptimization(cyipopt.Problem):
     """
@@ -79,10 +77,15 @@ class TrajectoryOptimization(cyipopt.Problem):
             - mult_x_U (ndarray): (n_optvar, 1) multiplier for the upper bound
             - g:
             - mult_g  : multiplier: (n_cons, 1) multiplier for the constraint
+        
+        # TODO: Can we specify which constraint is violated, semantically?
         """
         
         if self.verbose:
-            print(f"Iteration {iter_count}: {obj_value}, Primal Feas {inf_pr}, Dual Feas {inf_du}")
+            curr_iter = self.get_current_iterate()
+            max_viol  = curr_iter['g'].max()
+            print(f"Iteration {iter_count}: {obj_value:.3f}, Primal Feas {inf_pr:.3f}, Dual Feas {inf_du:.3f}, Max Violation : {max_viol:.3f}")
+
 
     @property
     def n_optvar(self):
@@ -286,9 +289,12 @@ class ParameterizedPlanner(abc.ABC):
         Args:
             status (dict): status of the optimization problem
                 flag: 
-                0 -> Algorithm terminated successfully at a point satisfying the convergence tolerances
-
+                -1 -> Maximum number of iterations exceeded
+                0  -> Algorithm terminated successfully at a point satisfying the convergence tolerances
+                1  -> Algorithm stopped at a point that was converged, not to "desired" tolerances, but to "acceptable" tolerances
                 2 -> Algorithm converged to a point of local infeasibility. Problem may be infeasible
+                
+                look https://github.com/mechmotum/cyipopt/blob/master/cyipopt/cython/ipopt_wrapper.pyx#L85 for full detail
             
             random_initialization (bool): whether to initialize the trajectory parameter randomly
         
@@ -321,16 +327,25 @@ class ParameterizedPlanner(abc.ABC):
 
         nlp.add_option('sb', 'yes')
         nlp.add_option('print_level', 0)
-        nlp.add_option('tol', 1e-3)
-        nlp.add_option('max_wall_time', self.nlp_time_limit)
         
+        nlp.add_option('tol', 1e-3)
+        nlp.add_option('max_iter', 50)
+        nlp.add_option('dual_inf_tol', 50.0)
+        
+        nlp.add_option('acceptable_iter', 3)
+        nlp.add_option('acceptable_tol', 1e-1)
+        nlp.add_option('acceptable_dual_inf_tol', 1e6)
+        
+        start = TimeUtils.tic()
         x_opt, info = nlp.solve(x_0.cpu().numpy())
+        elapsed_time = TimeUtils.toc(start)
+        self.disp(f"Elapsed Time: {elapsed_time:.3f} sec")
 
         x_opt = torch.tensor(x_opt, device=self.device, dtype=self.dtype)
         k_opt = x_opt * self.FRS_info["delta_k"][self.opt_dim]
 
         self.disp(f"x0: {problem_data['meta']['state']}")
-        if info["status"] != 0:
+        if info["status"] not in FEASIBLE_FLAG:
             self.disp(info["status_msg"])
         else:
             self.disp("Algorithm Feasible")

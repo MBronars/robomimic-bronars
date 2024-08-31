@@ -1,6 +1,7 @@
 import torch
+import numpy as np
 
-def compute_jacobian(function, args, var_name, eps=1e-5):
+def compute_jacobian(function, args, var_name):
     """
     Computes the Jacobian of the function with respect to the variable specified by var_name.
 
@@ -41,6 +42,57 @@ def compute_jacobian(function, args, var_name, eps=1e-5):
         
         # Store the gradient in the Jacobian matrix
         jacobian[i] = target.grad.clone().flatten()
+    
+    # Reshape the Jacobian if the original output is multi-dimensional
+    if output.ndim > 1:
+        jacobian = jacobian.view(*output.shape, target.numel())
+    
+    return jacobian
+
+
+def compute_jacobian_numerical(function, args, var_name, eps=1e-5):
+    """
+    Computes the Jacobian of the function with respect to the variable specified by var_name
+    using numerical differentiation (finite difference method). Works with PyTorch tensors.
+
+    :param function: The function to differentiate. It should accept keyword arguments.
+    :param args: A dictionary of arguments to pass to the function.
+    :param var_name: The name of the variable in args with respect to which the derivative is computed.
+    :param eps: A small value for finite difference approximation.
+    :return: A Jacobian tensor where each row corresponds to the derivative of one output component
+             with respect to each input component.
+    """
+    # Extract the target variable and ensure it's a torch tensor
+    target = torch.as_tensor(args[var_name], dtype=torch.float32)
+    
+    # Evaluate the function to get the shape of the output
+    output = function(**args)
+    
+    # If output is a scalar, convert it to a tensor with a single element
+    if output.ndim == 0:
+        output = output.unsqueeze(0)
+    
+    # Initialize the Jacobian tensor
+    jacobian = torch.zeros(output.numel(), target.numel())
+    
+    # Iterate over each element in the target
+    for i in range(target.numel()):
+        # Create a copy of the target with a small perturbation
+        perturbed = target.clone().detach()
+        perturbed.flatten()[i] += eps
+        
+        # Create a copy of the arguments with the perturbed value
+        perturbed_args = args.copy()
+        perturbed_args[var_name] = perturbed
+        
+        # Compute the perturbed output
+        perturbed_output = function(**perturbed_args)
+        
+        # Compute the partial derivative using finite difference
+        partial_derivative = (perturbed_output - output) / eps
+        
+        # Store the partial derivative in the Jacobian tensor
+        jacobian[:, i] = partial_derivative.flatten()
     
     # Reshape the Jacobian if the original output is multi-dimensional
     if output.ndim > 1:

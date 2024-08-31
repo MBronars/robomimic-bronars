@@ -12,7 +12,7 @@ def load_config_from_json(json_path):
 
     It does by loading the base config using algo_name and overwrite the settings with the json file.
     """
-    ext_cfg = json.load(open(json_path, 'r'))
+    ext_cfg = json.load(open(json_path, "r"))
     config = config_factory(ext_cfg["algo_name"])
     with config.values_unlocked():
         config.update(ext_cfg)

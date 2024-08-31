@@ -211,7 +211,6 @@ def get_zonotope_from_mesh_vertices(vertices):
     """
     Create zonotope that represents the bounding box of mesh ver
     """
-
     min_coords = np.min(vertices, axis=0)
     max_coords = np.max(vertices, axis=0)
 
@@ -268,6 +267,21 @@ def maybe_flatten_the_zonotope(zonotope_list):
     flatten(zonotope_list)
     
     return flat_list
+
+def get_bounding_box_of_zonotope_lists(zonotope_list):
+    """
+    Get the bounding box zonotope that contains all the zonotopes in the list
+
+    Args:
+        zonotope_list (list): list of zonotopes
+    
+    Returns:
+        zonotope: the bounding box zonotope
+    """
+    V = torch.vstack([Z.polyhedron() for Z in zonotope_list])
+    V = V.cpu().numpy()
+    
+    return get_zonotope_from_mesh_vertices(V)
 
 
 if __name__ == "__main__":

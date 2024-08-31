@@ -1,7 +1,5 @@
 """
-Test the wrapper policy of the backup planner.
-
-The objective of the backup planner is to achieve the target joint angle
+Run the safety filter with the grasping backup planner
 """
 import os
 import json
@@ -9,7 +7,6 @@ from copy import deepcopy
 
 import imageio
 import numpy as np
-import einops
 
 import robomimic
 from robomimic.algo.algo import RolloutPolicy
@@ -22,9 +19,9 @@ import safediffusion.utils.reachability_utils as ReachUtils
 POLICY_PATH = os.path.join(robomimic.__path__[0], 
                            "../diffusion_policy_trained_models/kinova/model_epoch_600_joint.pth") # delta-end-effector
 CONFIG_PATH = os.path.join(os.path.dirname(__file__),
-                           "../exps/backup_planner_eefpos/safediffusion_arm.json")
+                           "../exps/safety_filter_grasp_newenv/safediffusion_arm.json")
 
-def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target_grasp_pos,
+def test(policy, env, horizon, render_mode, seed, save_dir, camera_names,
          video_fps = 20, video_skip = 5):
     assert isinstance(env, SafetyEnv)
     assert isinstance(policy, RolloutPolicy)
@@ -34,7 +31,6 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
     obs  = env.reset()
     obs  = env.reset_to(env.get_state())
     goal = env.get_goal()
-    goal["grasp_pos"] = target_grasp_pos
 
     policy.start_episode()
 
@@ -57,6 +53,7 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
 
         env.switch_controller(controller_to_use)
         next_obs, _, done, _ = env.step(act)
+        goal                 = env.get_goal()
 
         success = env.is_success()["task"]
 
@@ -77,28 +74,68 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
                 elif render_mode == "zonotope":
                     video_img = []
 
-                    if policy.nominal_plan is not None:
-                        plan = policy.backup_policy.get_grasping_pos_from_plan(
-                            plan                = policy.nominal_plan
-                        )
-                    else:
-                        plan = None
+                    plan = policy.backup_policy.get_grasping_pos_from_plan(plan = policy.nominal_plan)
 
-                    goal_zonotope = ReachUtils.get_zonotope_from_sphere_geom(pos  = goal["grasp_pos"],
+                    goal_zonotope = [ReachUtils.get_zonotope_from_sphere_geom(pos  = goal["grasp_pos"],
                                                                              rot  = np.eye(3),
                                                                              size = [0.05]
-                                                                            )
-                    
-                    n_skip = 25
-                    FRS_links = []
-                    FRS_links.extend(policy.backup_policy.gripper_FRS_links)
-                    FRS_links.extend(policy.backup_policy.arm_FRS_links)
+                                                                            )]
 
+                    # prepare visualization
+                    # plan = policy.backup_policy.get_eef_pos_from_plan(
+                    #         plan              = policy.nominal_plan,
+                    #         T_world_to_base   = obs["T_world_to_base"],
+                    # )
+
+                    # if len(policy._backup_plan) > 0:
+                    #     backup_plan = policy.backup_policy.get_eef_pos_from_plan(
+                    #             plan              = policy._backup_plan,
+                    #             T_world_to_base   = obs["T_world_to_base"],
+                    #     )
+                    # else:
+                    #     backup_plan = None
+
+                    # Check the zonotope of the interest for visualization
+                    
+                    # This check if the env_zonotope (directly reading the robot geometry form sim)
+                    # collides with the forward_occupancy result using link_zonotopes
+                    # FO_arm  = policy.backup_policy.get_arm_zonotopes_at_q(
+                    #             q                 = policy.backup_policy.to_tensor(obs["robot0_joint_pos"]),
+                    #             T_frame_to_base   = obs["T_world_to_base"]
+                    #          )
+                    
+                    # T_world_to_arm_base = policy.backup_policy.to_tensor(obs["T_world_to_base"])
+                    # T_arm_base_to_gripper_base = policy.backup_policy.get_link_pose_at_q("right_hand", obs["robot0_joint_pos"]) 
+                    # T_world_to_gripper_base = T_world_to_arm_base @ T_arm_base_to_gripper_base
+
+                    # FO_gripper = policy.backup_policy.get_gripper_zonotopes_at_q(
+                    #     q               = policy.backup_policy.to_tensor(obs["robot0_gripper_qpos"]),
+                    #     T_frame_to_base = T_world_to_gripper_base
+                    # )
+
+                    # FRS = []
+                    # FRS.extend(FO_arm)
+                    # FRS.extend(FO_gripper)
+
+                    # Visualize the forward occupancy
+
+                    # n_skip = 25
+
+                    # FRS_links = []
+                    # FRS_links.extend(policy.backup_policy.gripper_FRS_links)
+                    # FRS_links.extend(policy.backup_policy.arm_FRS_links)
+
+                    # param  = policy._backup_plan.get_trajectory_parameter()
+                    # optvar = param[policy.backup_policy.opt_dim]
+                    # beta   = optvar/policy.backup_policy.FRS_info["delta_k"][policy.backup_policy.opt_dim]
+                    # beta   = einops.repeat(beta, 'n -> repeat n', repeat=policy.backup_policy.n_timestep-1)
+                    # FRS = [FRS_link.slice_all_dep(beta) for FRS_link in FRS_links]
+                    # FRS = [FRS_link[0::n_skip] for FRS_link in FRS]
+
+                    n_skip = 20
                     param  = policy._backup_plan.get_trajectory_parameter()
                     optvar = param[policy.backup_policy.opt_dim]
-                    beta   = optvar/policy.backup_policy.FRS_info["delta_k"][policy.backup_policy.opt_dim]
-                    beta   = einops.repeat(beta, 'n -> repeat n', repeat=policy.backup_policy.n_timestep-1)
-                    FRS = [FRS_link.slice_all_dep(beta) for FRS_link in FRS_links]
+                    FRS = policy.backup_policy.get_FRS_from_obs_and_optvar(obs, optvar)
                     FRS = [FRS_link[0::n_skip] for FRS_link in FRS]
 
                     for cam_name in camera_names:
@@ -109,7 +146,7 @@ def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target
                                        camera_name = cam_name,
                                        # zonotope
                                        FRS         = FRS,
-                                       goal        = [goal_zonotope],
+                                       goal        = goal_zonotope,
                                        # trajectory
                                        plan        = plan,
                                     #    backup_plan = backup_plan,
@@ -144,10 +181,10 @@ if __name__ == "__main__":
     # Test-seed: [11, 35, 74]
     ckpt_path        = POLICY_PATH
     config_json_path = CONFIG_PATH
-    rollout_horizon  = 400
-    render_mode      = "zonotope"
+    rollout_horizon  = 600
+    render_mode      = "rgb_array"
     camera_names     = ["agentview", "frontview"]
-    seeds            = range(2, 20)
+    seeds            = range(50)
     # ----------------------------------------- #
     # This seed is used to set the random seed for the environment and the policy, 
     # regardless of the random seed used for the rollout
@@ -156,7 +193,7 @@ if __name__ == "__main__":
     policy, env, config = KinovaUtils.policy_and_env_from_checkpoint_and_config(
                                         ckpt_path, 
                                         config_json_path, 
-                                        "backup",
+                                        "safety_filter",
                                         policy_kwargs = {"horizon": {"prediction_horizon": 32}}
     )
 
@@ -168,12 +205,6 @@ if __name__ == "__main__":
 
     # rollout the policy in the environment using random initial states
     for seed in seeds:
-        x = np.random.uniform(-0.4, 0.4)
-        y = np.random.uniform(-0.3, 0.3)
-        z = np.random.uniform(0.6, 1.5)
-
-        # Combine into a single point
-        random_point = np.array([x, y, z])
         stats = test(
                     policy       = policy,           # policy and environment
                     env          = env,              # experiment configuration
@@ -181,6 +212,5 @@ if __name__ == "__main__":
                     render_mode  = render_mode,      # render mode
                     seed         = seed,
                     save_dir     = config.safety.render.save_dir,
-                    camera_names = camera_names,
-                    target_grasp_pos = random_point
+                    camera_names = camera_names
         )

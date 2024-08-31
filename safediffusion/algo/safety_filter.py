@@ -12,12 +12,14 @@ import numpy as np
 
 from robomimic.algo import RolloutPolicy
 from safediffusion.algo.plan import ReferenceTrajectory
-from safediffusion.algo.planner_base import ParameterizedPlanner
+from safediffusion.algo.planner_base import ParameterizedPlanner, FEASIBLE_FLAG
 
 
 class SafetyFilter(RolloutPolicy, abc.ABC):
     """
     Wrapper of the policy (or rolloutpolicy) to make the policy safe
+
+    NOTE: for the goal_dict input to the policy, it should contain keys for both perf_policy and backup_policy
 
     TODO: Think of how to load dtype and device wisely
     """
@@ -39,7 +41,9 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         self.device         = device
         
         # performance policy-related
-        self.rollout_policy_obs_keys = self.rollout_policy.policy.global_config.all_obs_keys
+        self.rollout_policy_obs_keys  = self.rollout_policy.policy.global_config.all_obs_keys
+        self.rollout_policy_goal_keys = [key for modality in self.rollout_policy.policy.obs_config.modalities.goal.values()
+                                         for key in modality]
         
         # backup policy-related
         self.backup_policy_weight_keys = list(self.backup_policy.weight_dict.keys())
@@ -143,7 +147,8 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
             backup_plan, info = self.backup_policy(obs_dict              = ob_init, 
                                                    goal_dict             = goal_init, 
                                                    random_initialization = True)
-            if info["status"] == 0:
+            if info["status"] in FEASIBLE_FLAG:
+                # 0, 1, 6 is the feasible tag for cyipopt
                 self.set_backup_plan(backup_plan)
                 break
 
@@ -206,7 +211,7 @@ class SafetyFilter(RolloutPolicy, abc.ABC):
         self.update_backup_policy_weight()
         backup_plan, info = self.backup_policy(obs_dict=ob_backup, goal_dict=goal_backup)
 
-        if info["status"] == 0:
+        if info["status"] in FEASIBLE_FLAG:
             return backup_plan, info
         else:
             return None, info

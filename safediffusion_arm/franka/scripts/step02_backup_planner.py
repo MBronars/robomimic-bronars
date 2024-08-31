@@ -16,13 +16,13 @@ from robomimic.algo.algo import RolloutPolicy
 
 from safediffusion.envs.env_safety import SafetyEnv
 from safediffusion.utils.rand_utils import set_random_seed
-import safediffusion_arm.kinova_gen3.utils as KinovaUtils
+import safediffusion_arm.franka.utils as FrankaUtiils
 import safediffusion.utils.reachability_utils as ReachUtils
 
 POLICY_PATH = os.path.join(robomimic.__path__[0], 
-                           "../diffusion_policy_trained_models/kinova/model_epoch_600_joint.pth") # delta-end-effector
+                           "../diffusion_policy_trained_models/franka/model_epoch_400.pth") # delta-end-effector
 CONFIG_PATH = os.path.join(os.path.dirname(__file__),
-                           "../exps/backup_planner_eefpos/safediffusion_arm.json")
+                           "../exps/base/config.json")
 
 def test(policy, env, horizon, render_mode, seed, save_dir, camera_names, target_grasp_pos,
          video_fps = 20, video_skip = 5):
@@ -147,13 +147,13 @@ if __name__ == "__main__":
     rollout_horizon  = 400
     render_mode      = "zonotope"
     camera_names     = ["agentview", "frontview"]
-    seeds            = range(2, 20)
+    seeds            = range(3, 20)
     # ----------------------------------------- #
     # This seed is used to set the random seed for the environment and the policy, 
     # regardless of the random seed used for the rollout
     set_random_seed(42)
 
-    policy, env, config = KinovaUtils.policy_and_env_from_checkpoint_and_config(
+    policy, env, config = FrankaUtiils.policy_and_env_from_checkpoint_and_config(
                                         ckpt_path, 
                                         config_json_path, 
                                         "backup",

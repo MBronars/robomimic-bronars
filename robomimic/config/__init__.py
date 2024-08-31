@@ -12,5 +12,6 @@ from robomimic.config.iris_config import IRISConfig
 from robomimic.config.td3_bc_config import TD3_BCConfig
 from robomimic.config.diffusion_policy_config import DiffusionPolicyConfig
 from robomimic.config.diffusers_config import DiffusersConfig
+from robomimic.config.act_config import ACTConfig
 
 from safediffusion.config.safe_diffusion_config import SafeDiffusionConfig

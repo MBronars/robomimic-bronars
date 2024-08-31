@@ -11,17 +11,22 @@ class SafePickPlaceEnv(SafeArmEnv):
     def __init__(self, env, **kwargs):
         super().__init__(env, **kwargs)
 
-        self.gripper_innerpad_geoms = []
-        self.gripper_innerpad_geoms.extend(self.unwrapped_env.robots[0].gripper.important_geoms["left_fingerpad"])
-        self.gripper_innerpad_geoms.extend(self.unwrapped_env.robots[0].gripper.important_geoms["right_fingerpad"]) 
-        self.gripper_innerpad_geoms.extend(["gripper0_right_inner_knuckle_collision",
-                                            "gripper0_right_inner_finger_collision",
-                                            "gripper0_right_fingertip_collision",
-                                            "gripper0_left_inner_knuckle_collision",
-                                            "gripper0_left_inner_finger_collision",
-                                            "gripper0_left_fingertip_collision"
-                                        ])
-        
+        self.gripper_innerpad_geoms = self.get_gripper_innerpad_geoms()
+
+        # TODO: legacy
+        # self.gripper_innerpad_geoms = []
+
+        # self.gripper_innerpad_geoms.extend(self.unwrapped_env.robots[0].gripper.important_geoms["left_fingerpad"])
+        # self.gripper_innerpad_geoms.extend(self.unwrapped_env.robots[0].gripper.important_geoms["right_fingerpad"]) 
+        # self.gripper_innerpad_geoms.extend(["gripper0_right_inner_knuckle_collision",
+        #                                     "gripper0_right_inner_finger_collision",
+        #                                     "gripper0_right_fingertip_collision",
+        #                                     "gripper0_left_inner_knuckle_collision",
+        #                                     "gripper0_left_inner_finger_collision",
+        #                                     "gripper0_left_fingertip_collision"
+        #                                 ])
+        self.pregrasp_height = 0.2
+
         # Render settings
         self.patches.update({
             "active_object" : None,
@@ -29,6 +34,17 @@ class SafePickPlaceEnv(SafeArmEnv):
             "backup_plan"   : None,
             "goal"          : None,
         })
+    
+    def get_gripper_innerpad_geoms(self):
+        """
+        Get the names of the geometry of the gripper's important geometry
+        """
+        gripper = self.unwrapped_env.robots[0].gripper
+        important_geoms = gripper.important_geoms
+        important_geoms = [geom for v in important_geoms.values() for geom in v]
+        important_geoms = list(set(important_geoms))
+
+        return important_geoms
 
     # -------------------------------------------------------- #
     # Abstract functions to override (EnvBase)
@@ -44,8 +60,18 @@ class SafePickPlaceEnv(SafeArmEnv):
         goal_dict = super().get_goal()
         
         if hasattr(self, 'active_object'):
-            active_object_zonotope = self.geom_table.loc[self.geom_table["active_object"], "zonotope"].iloc[0]
-            goal_dict["grasp_pos"] = np.array(active_object_zonotope.center)
+            if self.is_grasping():
+                target_grasp_pos = self.unwrapped_env.target_bin_placements[self.active_object_id].copy()
+                target_grasp_pos[2] = 1
+
+            else:
+                active_object_zonotope = self.geom_table.loc[self.geom_table["active_object"], "zonotope"].iloc[0]
+                center    = active_object_zonotope.center.clone()
+                size      = active_object_zonotope.generators.abs().max(axis=0).values.clone()
+                target_grasp_pos = center
+                target_grasp_pos[2] += (size[2] + self.pregrasp_height)
+            
+            goal_dict["grasp_pos"] = np.array(target_grasp_pos)
         
         return goal_dict
     
@@ -61,6 +87,7 @@ class SafePickPlaceEnv(SafeArmEnv):
 
         if object_name is not None:
             self.active_object = object_name
+            self.active_object_id = self.unwrapped_env.object_to_id[object_name.lower()]
             self.geom_table    = self.update_active_object_in_geom_table(self.geom_table)
         
         return self.get_goal()

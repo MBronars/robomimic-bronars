@@ -23,6 +23,13 @@ class SafeDiffusionConfig(DiffusionPolicyConfig):
         # trajectory optimization
         self.safety.trajopt.verbose = False
         self.safety.trajopt.nlp_time_limit = 3.0
+        self.safety.trajopt.use_reachable_scene_filter = False  # only build the constraint for the obstacle that is reachable (rough-check)
+        self.safety.trajopt.reachable_scene_radius     = 0.35   # the radius of the reachable scene, accounted from the robot end-effector
+        
+        self.safety.trajopt.use_last_few_arm_links     = False  # use the last few arm links for the constraint qualification
+        self.safety.trajopt.num_last_few_arm_links     = 3      # use the last few arm links for the constraint qualification
+        
+        self.safety.trajopt.use_gripper_approximation  = False  # use the gripper approximation for the constraint qualification
         
         # render configuration
         self.safety.render.save_dir = None

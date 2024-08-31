@@ -1,9 +1,7 @@
 """
 Useful transformation-related (rotation, translation) functions
-
-All functions assume the input of numpy array
 """
-
+import torch
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -16,12 +14,20 @@ def make_pose(rot, pos):
     Returns
         T (np.array) 4x4 transformation matrix
     """
-    T = np.eye(4)
-
-    T[:3, :3] = rot
-    T[:3, 3]  = pos
-
-    return T
+    if isinstance(rot, np.ndarray) and isinstance(pos, np.ndarray):
+        T = np.eye(4)
+        T[:3, :3] = rot
+        T[:3, 3]  = pos
+        return T
+    
+    elif isinstance(rot, torch.Tensor) and isinstance(pos, torch.Tensor):
+        T = torch.eye(4, dtype=rot.dtype, device=rot.device)
+        T[:3, :3] = rot
+        T[:3, 3]  = pos
+        return T
+    
+    else:
+        raise TypeError("Input arguments must both be either np.ndarray or torch.Tensor.")
 
 def pose_to_rot_pos(T):
     rot = T[:3, :3]
@@ -76,6 +82,11 @@ def rot_interp(R1, R2, ratio):
     # Convert the interpolated quaternion back to a rotation matrix
     R_interp = R.from_quat(q_interp).as_matrix()
 
+    if isinstance(R1, torch.Tensor):
+        R_interp = torch.tensor(R_interp, dtype=R1.dtype, device=R1.device)
+    elif isinstance(R1, np.ndarray):
+        R_interp = np.array(R_interp)
+
     return R_interp
 
 def pos_interp(p1, p2, ratio):
@@ -94,7 +105,7 @@ def pose_interp(T1, T2, ratio):
 
     return T_interp
 
-def rot_skew(angular_axis):
+def skew_symmetric(angular_axis):
     """
     Skew matrix representation of the angular axis
 
@@ -109,6 +120,10 @@ def rot_skew(angular_axis):
         skew_symmetric_matrix (np.array) (B, 3, 3)
     """
     assert angular_axis.shape[-1] == 3
+
+    ndim = angular_axis.ndim
+    if ndim == 1:
+        angular_axis = angular_axis[np.newaxis, :]
 
     # Define the skew-symmetric template matrix
     w = np.array([[[0,  0,  0],
@@ -128,6 +143,9 @@ def rot_skew(angular_axis):
 
     # Perform matrix multiplication using broadcasting
     skew_matrices = np.einsum('bij,jik->bik', angular_axis, w)  # Shape (B, 3, 3)
+
+    if ndim == 1:
+        skew_matrices = skew_matrices[0]
 
     return skew_matrices
 
@@ -152,7 +170,7 @@ def bracket_screw_axis(screw_axis):
     v = screw_axis[:, :3]
     w = screw_axis[:, 3:]
 
-    out = np.concatenate([rot_skew(w), v[:, :, np.newaxis]], axis = -1) # (B, 3, 4)
+    out = np.concatenate([skew_symmetric(w), v[:, :, np.newaxis]], axis = -1) # (B, 3, 4)
     out = np.concatenate([out, np.zeros((B, 1, 4))]        , axis = -2)
 
     return out
@@ -174,6 +192,6 @@ def adjoint_T(T):
     adjoint_T[:3, :3] = R
     adjoint_T[3:, 3:] = R
 
-    adjoint_T[3:, :3] = np.matmul(rot_skew(p.unsqueeze(0)), R)
+    adjoint_T[3:, :3] = skew_symmetric(p)@R
 
     return adjoint_T

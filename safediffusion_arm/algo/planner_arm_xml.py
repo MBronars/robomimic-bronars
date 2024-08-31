@@ -9,20 +9,28 @@ from safediffusion.algo.helper import ReferenceTrajectory
 import safediffusion.utils.reachability_utils as ReachUtils
 import safediffusion.utils.robot_utils as RobotUtils
 import safediffusion.utils.transform_utils as TransformUtils
+import safediffusion.utils.math_utils as MathUtils
 
 from safediffusion_arm.algo.planner_arm import ArmtdPlanner
 
 
 # GLOBAL ARM REGISTRATION
-ROBOT_JOINT_VEL_LIMIT         = dict(kinova3 = [1.3963, 1.3963, 1.3963, 1.3963, 1.2218, 1.2218, 1.2218])
-ROBOT_EEF_BODY_NAME           = dict(kinova3 = "Bracelet_Link")
-ROBOT_GRIPPER_SITE_BODY_NAME  = dict(kinova3 = "right_hand")
+ROBOT_JOINT_VEL_LIMIT         = dict(kinova3 = [1.3963, 1.3963, 1.3963, 1.3963, 1.2218, 1.2218, 1.2218],
+                                     panda   = [2.6180, 2.6180, 2.6180, 2.6180, 3.1416, 3.1416, 3.1416])
+ROBOT_EEF_BODY_NAME           = dict(kinova3 = "Bracelet_Link",
+                                     panda   = "link7")
+ROBOT_GRIPPER_SITE_BODY_NAME  = dict(kinova3 = "right_hand",
+                                     panda   = "right_hand")
 
 # GLOBAL GRIPPER REGISTRATION
-GRIPPER_INIT_QPOS               = dict(robotiq_gripper_85 = [-0.026, -0.267, -0.200, -0.026, -0.267, -0.200])
-GRIPPER_LEFT_FINGER_BODY_NAME   = dict(robotiq_gripper_85 = "left_inner_finger")
-GRIPPER_RIGHT_FINGER_BODY_NAME  = dict(robotiq_gripper_85 = "right_inner_finger")
-GRIPPER_BASE_BODY_NAME          = dict(robotiq_gripper_85 = "robotiq_85_adapter_link")
+GRIPPER_INIT_QPOS               = dict(robotiq_gripper_85 = [-0.026, -0.267, -0.200, -0.026, -0.267, -0.200],
+                                       panda_gripper      = [0.020833, -0.020833])
+GRIPPER_LEFT_FINGER_BODY_NAME   = dict(robotiq_gripper_85 = "left_inner_finger",
+                                       panda_gripper      = "leftfinger")
+GRIPPER_RIGHT_FINGER_BODY_NAME  = dict(robotiq_gripper_85 = "right_inner_finger",
+                                       panda_gripper      = "rightfinger")
+GRIPPER_BASE_BODY_NAME          = dict(robotiq_gripper_85 = "robotiq_85_adapter_link",
+                                       panda_gripper      = "right_gripper")
 
 class ArmtdPlannerXML(ArmtdPlanner):
     """
@@ -198,7 +206,7 @@ class ArmtdPlannerXML(ArmtdPlanner):
 
         return arm_zonos
     
-    def get_arm_link_pose_at_q(self, link_name, q, return_gradient = False):
+    def get_arm_link_pose_at_q(self, link_name, q):
         """
         Get the relative pose of the link of given name at joint angle `q` from the world
 
@@ -218,16 +226,22 @@ class ArmtdPlannerXML(ArmtdPlanner):
         T_arm_base_to_link = TransformUtils.make_pose(rot = R, pos = p)
         T_world_to_link    = self.T_world_to_arm_base @ T_arm_base_to_link
         T_world_to_link    = self.to_tensor(T_world_to_link)
-
-        if return_gradient:
-            Jac_arm_base_to_link    = self.arm_parser.compute_space_jacobian(q = q, name = link_name)  # (6, 7)
-            Jac_world_to_link       = TransformUtils.adjoint_T(T_world_to_link) @ Jac_arm_base_to_link  # (6, 7)
-
-        else:
-            grad_T_world_to_link    = None
         
-        
-        return T_world_to_link, grad_T_world_to_link
+        return T_world_to_link
+    
+    def get_arm_jacobian_at_q(self, q):
+        """
+        Get the Jacobian matrix of the arm at the given joint angle q
+
+        Args:
+            q (torch.tensor) (n_joint,) the query joint angle
+
+        Returns:
+            J (torch.tensor) (6, n_joint) the Jacobian matrix
+        """
+        J = self.arm_parser.compute_space_jacobian(q)
+
+        return self.to_tensor(J)
     
     def get_grasping_pos_at_q(self, q, return_gradient = False):
         """
@@ -244,25 +258,32 @@ class ArmtdPlannerXML(ArmtdPlanner):
         """
         assert self.gripper_name is not None
 
-        T_world_to_gripper_base, grad_T_to_q = self.get_arm_link_pose_at_q(
-                                                            q               = q,
-                                                            link_name       = self.robot_gripper_site_name, 
-                                                            return_gradient = return_gradient)
-        
+        T_world_to_gripper_base = self.get_arm_link_pose_at_q(q = q, link_name = self.robot_gripper_site_name)
         T_world_to_grasp        = T_world_to_gripper_base @ self.T_gripper_base_to_grasp
         _, pos_world_to_grasp   = TransformUtils.pose_to_rot_pos(T_world_to_grasp)
         pos_world_to_grasp      = self.to_tensor(pos_world_to_grasp)
+        
 
         if return_gradient:
-            grad_T_to_q             = grad_T_to_q @ self.T_gripper_base_to_grasp
-            grad_pos_world_to_grasp = grad_T_to_q[:, :3, -1]
-            grad_pos_world_to_grasp = self.to_tensor(grad_pos_world_to_grasp)
-        else:
-            grad_pos_world_to_grasp = None
+            # TODO: cannot further proceed: do not know how to get the manipulator jacobian of the gripper
+            J_eef          = self.arm_parser.compute_space_jacobian(q = q, name = self.robot_gripper_site_name)
+
+            # transform jacobian to the world frame
+            R_world_to_arm_base, _ = TransformUtils.pose_to_rot_pos(self.T_world_to_arm_base)
+            PHI = torch.zeros((6, 6))
+            PHI[:3, :3] = R_world_to_arm_base
+            PHI[3:, 3:] = R_world_to_arm_base
+            J_world_to_eef = PHI @ J_eef
+
+            # TODO: need to transform the jacobian to the grasping frame
+            grad_pos_world_to_grasp = self.to_tensor(J_world_to_eef[3:, :])
+
+            return pos_world_to_grasp, grad_pos_world_to_grasp
         
-        return pos_world_to_grasp, grad_pos_world_to_grasp
+        else:
+            return pos_world_to_grasp
     
-    def get_gripper_zonotopes_at_q(self, q, T_frame_to_base):
+    def get_gripper_zonotopes_at_q(self, q, T_frame_to_base, use_approximation = False):
         """
         Get the gripper zonotopes at the given joint angle q
         [frame: world]
@@ -284,6 +305,10 @@ class ArmtdPlannerXML(ArmtdPlanner):
         """
         gripper_zonos = self.gripper_parser.forward_kinematics_zono(q)
 
+        if use_approximation:
+            gripper_zonos = ReachUtils.get_bounding_box_of_zonotope_lists(gripper_zonos)
+            gripper_zonos = [gripper_zonos]
+            
         rot, pos = TransformUtils.pose_to_rot_pos(T_frame_to_base)
 
         gripper_zonos = [ReachUtils.transform_zonotope(zono, pos=pos, rot=rot)
@@ -315,7 +340,8 @@ class ArmtdPlannerXML(ArmtdPlanner):
             if vis_gripper:
                 T_world_to_gripper_base = self.get_arm_link_pose_at_q(self.robot_gripper_site_name, plan.x_des[i]) 
                 FO_i_gripper = self.get_gripper_zonotopes_at_q(gripper_init_qpos, 
-                                                               T_frame_to_base = T_world_to_gripper_base)
+                                                               T_frame_to_base   = T_world_to_gripper_base,
+                                                               use_approximation = self.use_gripper_approximation)
 
                 FO_i.extend(FO_i_gripper)
 
