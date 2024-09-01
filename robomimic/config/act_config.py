@@ -14,6 +14,7 @@ class ACTConfig(BaseConfig):
         """
         super(ACTConfig, self).train_config()
         self.train.hdf5_load_next_obs = False
+        self.train.pad_mask = True
 
     def algo_config(self):
         """

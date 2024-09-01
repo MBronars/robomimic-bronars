@@ -381,3 +381,23 @@ class SafePickPlaceBreadEnv(SafePickPlaceEnv):
         succ = bool(self.unwrapped_env.objects_in_bins[active_object_id])
 
         return {"task": succ}
+    
+class SafePickPlaceCanEnv(SafePickPlaceEnv):
+    """
+    This environment is created only to override the notion of success.
+    """
+    def __init__(self, env, **kwargs):
+        """
+        Initially sets the object to grasp as the "bread"
+        """
+        super().__init__(env, **kwargs)
+        self.set_goal(object_name = "can")
+    
+    def is_success(self):
+        """
+        The task is success if the bread is in the bin
+        """
+        active_object_id = self.unwrapped_env.object_to_id[self.active_object.lower()]
+        succ = bool(self.unwrapped_env.objects_in_bins[active_object_id])
+
+        return {"task": succ}

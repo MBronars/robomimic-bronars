@@ -126,7 +126,11 @@ class ACT(BC_VAE):
             image = self.normalize(image)
             image = image.unsqueeze(axis=1)
             images.append(image)
-        images = torch.cat(images, axis=1)
+
+        if images:  # Check if the list is not empty
+            images = torch.cat(images, axis=1)
+        else:
+            images = torch.tensor([])  # or handle the empty case as needed
 
         env_state = torch.zeros([qpos.shape[0], 10]).cuda()  # this is not used
 
@@ -165,6 +169,9 @@ class ACT(BC_VAE):
         proprio = [obs_dict[k] for k in self.proprio_keys]
         proprio = torch.cat(proprio, axis=1)
         qpos = proprio
+        
+        if qpos.ndim == 3:
+            qpos = qpos.squeeze(-1)
 
         images = []
         for cam_name in self.camera_keys:
@@ -172,7 +179,11 @@ class ACT(BC_VAE):
             image = self.normalize(image)
             image = image.unsqueeze(axis=1)
             images.append(image)
-        images = torch.cat(images, axis=1)
+            
+        if images:  # Check if the list is not empty
+            images = torch.cat(images, axis=1)
+        else:
+            images = torch.tensor([])  # or handle the empty case as needed
 
         env_state = torch.zeros([qpos.shape[0], 10]).cuda() # not used
 

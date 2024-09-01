@@ -15,7 +15,7 @@ from safediffusion.algo.planner_base import ParameterizedPlanner
 from safediffusion.utils.rand_utils import set_random_seed
 from safediffusion.envs.env_safety import SafetyEnv
 
-from safediffusion_arm.environments.safe_pickplace_env import SafePickPlaceBreadEnv
+from safediffusion_arm.environments.safe_pickplace_env import SafePickPlaceBreadEnv, SafePickPlaceCanEnv
 from safediffusion_arm.algo.planner_arm_xml import ArmtdPlannerXML
 from safediffusion_arm.algo.predictor_arm import ArmEnvSimStatePredictor
 from safediffusion_arm.algo.safety_filter_arm import SafeDiffusionPolicyArm, IdentityDiffusionPolicyArm, IdentityBackupPolicyArm
@@ -96,7 +96,7 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                            verbose          = True)
     
     # wrap the environment with the safety wrapper
-    env_safe  = SafePickPlaceBreadEnv(env, **config.safety)
+    env_safe  = SafePickPlaceCanEnv(env, **config.safety)
     dt_action = 1/env_safe.unwrapped_env.control_freq
 
     # wrap the policy that needs 1) state predictor and 2) backup_policy
@@ -107,7 +107,7 @@ def policy_and_env_from_checkpoint_and_config(ckpt_path, config_path, policy_typ
                                                  render_offscreen=True, 
                                                  verbose=True)
     
-    envCopy_safe = SafePickPlaceBreadEnv(envCopy, **config.safety)
+    envCopy_safe = SafePickPlaceCanEnv(envCopy, **config.safety)
     predictor    = ArmEnvSimStatePredictor(envCopy_safe)
 
     # predictor = DiffuserStatePredictor(rollout_policy = policy, dt = dt_action)

@@ -21,6 +21,12 @@ else:
 
 import safediffusion.utils.reachability_utils as ReachUtils
 
+from enum import Enum
+
+class JointType(Enum):
+    HINGE = 0
+    SLIDE = 1
+
 def check_robot_collision(env, object_names_to_grasp=set(), verbose=False):
     """
     Returns True if the robot is in collision with the environment or gripper is in collision with non-graspable object.
@@ -350,6 +356,7 @@ class RobotXMLParser:
         
         self.n_joint        = self.get_n_joint()
         self.joint_axes     = self.get_joint_axes()
+        self.joint_types    = self.get_joint_types()
         self.rot_skew_sym   = self.get_rot_skew_sym()
         self.link_zonos_stl = self.get_link_zonos_stl()
         self.rot_params     = self.get_relative_rot()
@@ -469,6 +476,15 @@ class RobotXMLParser:
         joint = body.find('joint')
         if joint is not None:
             joint_name = joint.get('name')
+            joint_type = joint.get('type')
+            
+            if joint_type is None or joint_type == 'hinge':
+                joint_type = JointType.HINGE
+            elif joint_type == 'slide':
+                joint_type = JointType.SLIDE
+            else:
+                raise NotImplementedError(f"Unsupported joint type {joint_type}.")
+            
             axis = list(map(float, joint.get('axis').split())) if joint.get('axis') else [1, 0, 0]
             pos_lim = None
             tor_lim = None
@@ -480,6 +496,7 @@ class RobotXMLParser:
             node.joint_info = {
                 'name': joint_name,
                 'axis': axis,
+                'type': joint_type,
                 'pos_lim': pos_lim,
                 'tor_lim': tor_lim
             }
@@ -593,6 +610,20 @@ class RobotXMLParser:
         joint_axes = torch.tensor(joint_axes)
         
         return joint_axes
+    
+    def get_joint_types(self):
+        """
+        Get the joint types using preorder traversal.
+        """
+        def action(node):
+            if node.joint_info:
+                return node.joint_info["type"]
+            return None
+        
+        joint_types = self.preorder_apply(action)
+        joint_types = np.array(joint_types)
+        
+        return joint_types
 
     def get_rot_skew_sym(self):
         w = torch.tensor([[[0,0,0],[0,0,1],[0,-1,0]],
@@ -646,9 +677,25 @@ class RobotXMLParser:
         W = self.rot_skew_sym
         I = torch.eye(3)
 
-        R = I + torch.sin(q) * W + (1-torch.cos(q)) * W@W
+        joint_mask = torch.tensor((self.joint_types == JointType.HINGE), dtype=torch.bool)
+        joint_mask = joint_mask.unsqueeze(-1).unsqueeze(-1)
+        
+        R = torch.where(joint_mask,
+                        I + torch.sin(q) * W + (1-torch.cos(q)) * W@W,
+                        I)  # For slide joints, no rotation
 
         return R
+
+    def trans(self, q):
+        q = q.reshape(q.shape+(1,))
+        joint_mask = torch.tensor((self.joint_types == JointType.SLIDE), dtype=torch.bool)
+        joint_mask = joint_mask.unsqueeze(-1)
+        T = torch.where(torch.tensor(joint_mask),
+                        q * self.joint_axes,
+                        torch.zeros_like(self.joint_axes))  # For hinge joints, no translation
+        
+        return T
+    
     
     def forward_kinematics_zono(self, q):
         """
@@ -680,7 +727,13 @@ class RobotXMLParser:
             
             if node.joint_info:
                 # Update the rotation and position based on the current joint
-                Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+                joint_type = node.joint_info['type']
+                
+                if joint_type == JointType.HINGE:
+                    Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+                elif joint_type == JointType.SLIDE:
+                    Pi = Pi + Ri @ self.trans(q)[[joint_index]].squeeze(0)  # Apply joint translation
+                    
                 joint_index += 1
             
             if node.geom_info:
@@ -744,8 +797,12 @@ class RobotXMLParser:
             Ri = Ri @ node.rot
             
             if node.joint_info:
-                # Update the rotation and position based on the current joint
-                Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+                joint_type = node.joint_info['type']
+                
+                if joint_type == JointType.HINGE:
+                    Ri = Ri @ self.rot(q)[[joint_index]].squeeze(0)  # Apply joint rotation
+                elif joint_type == JointType.SLIDE:
+                    Pi = Pi + Ri @ self.trans(q)[[joint_index]].squeeze(0)  # Apply joint translation
 
                 R_s[:, :, joint_index] = Ri
                 P_s[:, joint_index]    = Pi

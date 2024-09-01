@@ -181,6 +181,7 @@ class BaseConfig(Config):
         self.train.pad_seq_length = True
         self.train.frame_stack = 1
         self.train.pad_frame_stack = True
+        self.train.pad_mask = False
 
         # keys from hdf5 to load into each batch, besides "obs" and "next_obs". If algorithms
         # require additional keys from each trajectory in the hdf5, they should be specified here.
